@@ -29,10 +29,16 @@ jobs:
         run: ./Tests/test_touch_profiles.sh
       - name: Compile host for the iOS Simulator
         run: |
+          set -o pipefail
+          status=0
           xcodebuild \
             -project UT99Apple.xcodeproj \
             -target UT99Apple \
             -sdk iphonesimulator \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build > xcodebuild.log 2>&1 || status=$?
+          # Keep the job log readable: surface diagnostics, not the full
+          # compiler invocations.
+          grep -E "error:|\*\* BUILD" xcodebuild.log | sort -u || true
+          exit $status
