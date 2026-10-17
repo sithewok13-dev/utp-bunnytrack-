@@ -150,7 +150,12 @@ The touch interface is designed as a full-bleed landscape overlay:
 
 - **Left thumb:** movement stick plus SCORE, USE, PREV, and NEXT utility
   directions.
-- **Right thumb:** look/aim stick, FIRE, ALT, JUMP, and DUCK.
+- **Right thumb:** look/aim stick, FIRE, ALT, JUMP, DUCK, and the DODGE
+  swipe pad: swipe left or right off it for a side dodge, up or down for a
+  forward or back dodge. It sends UT's normal double-tap on the matching
+  movement key, so it behaves exactly like keyboard dodging, including on
+  servers. Swipe distance, tap spacing, side-only mode, and haptics are in
+  Controls & Display.
 - **Menus:** a persistent `•••` button opens host settings; MENU opens the
   original Unreal interface.
 - **Customization:** opacity, scale, handedness, visibility, drag/pinch layout

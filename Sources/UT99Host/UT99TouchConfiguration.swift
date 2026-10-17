@@ -3,7 +3,7 @@ import Foundation
 struct UT99TouchConfiguration: Codable, Equatable {
     static let defaultsKey = "ut99.touch.configuration.v1"
     static let supportedActionIDs: Set<String> = [
-        "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "use",
+        "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "use",
         "nextWeapon", "previousWeapon", "scoreboard", "pause"
     ]
 
@@ -13,6 +13,16 @@ struct UT99TouchConfiguration: Codable, Equatable {
     var lookDeadZone: Double
     var movementDeadZone: Double
     var autoHideForController: Bool
+    /// Swipe travel, in points, before the DODGE pad commits to a direction.
+    var dodgeSwipeDistance: Double
+    /// Limit the DODGE pad to left/right so a vertical slip can never fire a
+    /// forward or backward dodge.
+    var dodgeSideOnly: Bool
+    var dodgeHaptics: Bool
+    /// Spacing between the synthesized double-tap edges. Each edge must
+    /// survive at least one engine tick, and the whole tap must still land
+    /// inside UT's 0.25s DodgeClickTime.
+    var dodgeStepMilliseconds: Int
 
     init(
         leftHanded: Bool,
@@ -20,7 +30,11 @@ struct UT99TouchConfiguration: Codable, Equatable {
         lookAcceleration: Double,
         lookDeadZone: Double,
         movementDeadZone: Double,
-        autoHideForController: Bool
+        autoHideForController: Bool,
+        dodgeSwipeDistance: Double = 18,
+        dodgeSideOnly: Bool = false,
+        dodgeHaptics: Bool = true,
+        dodgeStepMilliseconds: Int = 50
     ) {
         self.leftHanded = leftHanded
         self.hiddenActions = hiddenActions
@@ -28,6 +42,10 @@ struct UT99TouchConfiguration: Codable, Equatable {
         self.lookDeadZone = lookDeadZone
         self.movementDeadZone = movementDeadZone
         self.autoHideForController = autoHideForController
+        self.dodgeSwipeDistance = dodgeSwipeDistance
+        self.dodgeSideOnly = dodgeSideOnly
+        self.dodgeHaptics = dodgeHaptics
+        self.dodgeStepMilliseconds = dodgeStepMilliseconds
     }
 
     static let standard = UT99TouchConfiguration(
@@ -46,7 +64,12 @@ struct UT99TouchConfiguration: Codable, Equatable {
             lookAcceleration: min(max(lookAcceleration, 0), 1.5),
             lookDeadZone: min(max(lookDeadZone, 0), 0.03),
             movementDeadZone: min(max(movementDeadZone, 0.02), 0.45),
-            autoHideForController: autoHideForController
+            autoHideForController: autoHideForController,
+            dodgeSwipeDistance: min(max(dodgeSwipeDistance, 8), 48),
+            dodgeSideOnly: dodgeSideOnly,
+            dodgeHaptics: dodgeHaptics,
+            dodgeStepMilliseconds: min(max(dodgeStepMilliseconds, UT99DodgePlan.minimumStepMilliseconds),
+                                       UT99DodgePlan.maximumStepMilliseconds)
         )
     }
 
@@ -88,6 +111,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case leftHanded, hiddenActions, lookAcceleration, lookDeadZone, movementDeadZone, autoHideForController
+        case dodgeSwipeDistance, dodgeSideOnly, dodgeHaptics, dodgeStepMilliseconds
     }
 
     init(from decoder: Decoder) throws {
@@ -98,6 +122,15 @@ struct UT99TouchConfiguration: Codable, Equatable {
         lookDeadZone = try container.decode(Double.self, forKey: .lookDeadZone)
         movementDeadZone = try container.decode(Double.self, forKey: .movementDeadZone)
         autoHideForController = try container.decode(Bool.self, forKey: .autoHideForController)
+        // Dodge settings arrived after configurations and exported profiles
+        // were already in the field. Missing keys take the standard values.
+        let standard = Self.standard
+        dodgeSwipeDistance = try container.decodeIfPresent(Double.self, forKey: .dodgeSwipeDistance)
+            ?? standard.dodgeSwipeDistance
+        dodgeSideOnly = try container.decodeIfPresent(Bool.self, forKey: .dodgeSideOnly) ?? standard.dodgeSideOnly
+        dodgeHaptics = try container.decodeIfPresent(Bool.self, forKey: .dodgeHaptics) ?? standard.dodgeHaptics
+        dodgeStepMilliseconds = try container.decodeIfPresent(Int.self, forKey: .dodgeStepMilliseconds)
+            ?? standard.dodgeStepMilliseconds
     }
 
     func encode(to encoder: Encoder) throws {
@@ -108,6 +141,95 @@ struct UT99TouchConfiguration: Codable, Equatable {
         try container.encode(lookDeadZone, forKey: .lookDeadZone)
         try container.encode(movementDeadZone, forKey: .movementDeadZone)
         try container.encode(autoHideForController, forKey: .autoHideForController)
+        try container.encode(dodgeSwipeDistance, forKey: .dodgeSwipeDistance)
+        try container.encode(dodgeSideOnly, forKey: .dodgeSideOnly)
+        try container.encode(dodgeHaptics, forKey: .dodgeHaptics)
+        try container.encode(dodgeStepMilliseconds, forKey: .dodgeStepMilliseconds)
+    }
+}
+
+/// A dodge relative to the player's view, matching UT's double-tap
+/// directions on MoveForward, MoveBackward, StrafeLeft and StrafeRight.
+enum UT99DodgeDirection: String, CaseIterable {
+    case left, right, forward, back
+
+    var opposite: UT99DodgeDirection {
+        switch self {
+        case .left: .right
+        case .right: .left
+        case .forward: .back
+        case .back: .forward
+        }
+    }
+}
+
+enum UT99DodgeGesture {
+    /// Classify a DODGE pad swipe. `translation` is in UIKit points, so a
+    /// negative Y is an upward swipe. The dominant axis wins; nothing fires
+    /// until the swipe has travelled `threshold` points along it.
+    static func direction(
+        for translation: CGPoint,
+        threshold: CGFloat,
+        sideOnly: Bool
+    ) -> UT99DodgeDirection? {
+        let horizontal = abs(translation.x)
+        let vertical = abs(translation.y)
+        if horizontal >= vertical {
+            guard horizontal >= threshold, horizontal > 0 else { return nil }
+            return translation.x < 0 ? .left : .right
+        }
+        guard !sideOnly, vertical >= threshold else { return nil }
+        return translation.y < 0 ? .forward : .back
+    }
+}
+
+/// The key edges that reproduce a keyboard double-tap on one movement key.
+///
+/// UT's PlayerPawn only sees a dodge when the key goes down, up, and down
+/// again on separate ticks within DodgeClickTime. The movement stick may
+/// already hold the target key (which must be lifted first) or its opposite
+/// (which would cancel the axis), so both are released before the tap and
+/// handed back to the stick afterwards.
+enum UT99DodgePlan {
+    enum Key: Equatable { case target, opposite }
+
+    struct Edge: Equatable {
+        let atMilliseconds: Int
+        let key: Key
+        let pressed: Bool
+    }
+
+    static let dodgeClickWindowMilliseconds = 250
+    static let minimumStepMilliseconds = 20
+    /// Two steps separate the taps, so this keeps them inside the window.
+    static let maximumStepMilliseconds = 100
+
+    static func edges(targetHeld: Bool, oppositeHeld: Bool, stepMilliseconds: Int) -> [Edge] {
+        let step = min(max(stepMilliseconds, minimumStepMilliseconds), maximumStepMilliseconds)
+        var result: [Edge] = []
+        if targetHeld { result.append(Edge(atMilliseconds: 0, key: .target, pressed: false)) }
+        if oppositeHeld { result.append(Edge(atMilliseconds: 0, key: .opposite, pressed: false)) }
+        let start = targetHeld || oppositeHeld ? step : 0
+        result.append(Edge(atMilliseconds: start, key: .target, pressed: true))
+        result.append(Edge(atMilliseconds: start + step, key: .target, pressed: false))
+        result.append(Edge(atMilliseconds: start + step * 2, key: .target, pressed: true))
+        return result
+    }
+
+    /// When the stick takes its keys back: one step after the second tap so
+    /// that press is also seen on its own tick.
+    static func durationMilliseconds(targetHeld: Bool, oppositeHeld: Bool, stepMilliseconds: Int) -> Int {
+        (edges(targetHeld: targetHeld, oppositeHeld: oppositeHeld, stepMilliseconds: stepMilliseconds)
+            .last?.atMilliseconds ?? 0) + min(max(stepMilliseconds, minimumStepMilliseconds), maximumStepMilliseconds)
+    }
+
+    /// Edges that return both keys to whatever the stick holds now. The
+    /// target is physically down after the tap; the opposite is up.
+    static func restore(targetHeld: Bool, oppositeHeld: Bool) -> [(key: Key, pressed: Bool)] {
+        var result: [(key: Key, pressed: Bool)] = []
+        if !targetHeld { result.append((.target, false)) }
+        if oppositeHeld { result.append((.opposite, true)) }
+        return result
     }
 }
 

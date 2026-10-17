@@ -158,11 +158,14 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     }
 
     enum Action: String, CaseIterable {
-        case primaryFire, leftPrimaryFire, alternateFire, jump, crouch
+        case primaryFire, leftPrimaryFire, alternateFire, jump, crouch, dodge
         case use, nextWeapon, previousWeapon, scoreboard, pause
     }
 
     var onAction: ((Action, Bool) -> Void)?
+    /// DODGE is a swipe pad, not a held button: it publishes one direction
+    /// per touch instead of press/release edges through `onAction`.
+    var onDodge: ((UT99DodgeDirection) -> Void)?
     var onMove: ((CGPoint, Bool) -> Void)?
     var onMenuCursorNudge: ((CGPoint) -> Void)?
     var onLook: ((CGPoint, Bool) -> Void)?
@@ -190,6 +193,10 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     private var menuInteractionActive = false
     private var placements: [String: UT99TouchPlacement] = [:]
     private let actionHaptic = UIImpactFeedbackGenerator(style: .light)
+    private let dodgeHaptic = UIImpactFeedbackGenerator(style: .rigid)
+    /// Where the current DODGE touch landed, in overlay coordinates. Nil when
+    /// the pad is idle or this touch has already fired its one dodge.
+    private var dodgeTouchOrigin: CGPoint?
     private(set) var editingLayout = false
     private(set) var testingLayout = false
     private let layoutBanner = UILabel()
@@ -211,6 +218,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         "primaryFire": .init(x: 0.8175355450236966, y: 0.6376068376068377, scale: 1),
         "alternateFire": .init(x: 0.75, y: 0.5367521367521367, scale: 1),
         "jump": .init(x: 0.8554502369668247, y: 0.4675213675213675, scale: 1.2872077226638794),
+        // Up and right of JUMP so dodge-then-jump is one short thumb hop, and
+        // clear of the host's three-dot button above it.
+        "dodge": .init(x: 0.905, y: 0.32, scale: 1),
         "crouch": .init(x: 0.7942338072669826, y: 0.4273504273504274, scale: 1),
         "previousWeapon": .init(x: 0.22946287519747235, y: 0.5863247863247864, scale: 1.1761363744735718),
         "nextWeapon": .init(x: 0.28080568720379145, y: 0.5923076923076923, scale: 1.226136326789856),
@@ -511,16 +521,35 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             button.accessibilityLabel = title(for: action)
             button.accessibilityHint = accessibilityHint(for: action)
             button.accessibilityIdentifier = "ut99.touch.\(action.rawValue)"
-            button.addTarget(self, action: #selector(buttonDown(_:)), for: [.touchDown, .touchDragEnter])
-            button.addTarget(self, action: #selector(buttonUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+            if action == .dodge {
+                // The swipe keeps tracking after the thumb leaves the pad, so
+                // DODGE must not release on touchDragExit like a held button.
+                button.addTarget(self, action: #selector(dodgeTouchBegan(_:forEvent:)), for: .touchDown)
+                button.addTarget(self, action: #selector(dodgeTouchMoved(_:forEvent:)),
+                                 for: [.touchDragInside, .touchDragOutside])
+                button.addTarget(self, action: #selector(dodgeTouchEnded(_:)),
+                                 for: [.touchUpInside, .touchUpOutside, .touchCancel])
+                button.accessibilityCustomActions = UT99DodgeDirection.allCases.map { direction in
+                    UIAccessibilityCustomAction(name: "Dodge \(direction.rawValue)") { [weak self] _ in
+                        guard let self, !self.editingLayout, !self.menuInteractionActive else { return false }
+                        self.onDodge?(direction)
+                        return true
+                    }
+                }
+            } else {
+                button.addTarget(self, action: #selector(buttonDown(_:)), for: [.touchDown, .touchDragEnter])
+                button.addTarget(self, action: #selector(buttonUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+            }
             button.tag = actionTag(action)
-            button.onAccessibilityActivate = { [weak self, weak button] in
-                guard let self, let button, !self.activeActions.contains(action) else { return }
-                // The original SDL entry owns the main thread once gameplay
-                // starts, so a main-queue delayed release cannot be trusted.
-                // Queue both edges synchronously; SDL preserves their order.
-                self.buttonDown(button)
-                self.buttonUp(button)
+            if action != .dodge {
+                button.onAccessibilityActivate = { [weak self, weak button] in
+                    guard let self, let button, !self.activeActions.contains(action) else { return }
+                    // The original SDL entry owns the main thread once gameplay
+                    // starts, so a main-queue delayed release cannot be trusted.
+                    // Queue both edges synchronously; SDL preserves their order.
+                    self.buttonDown(button)
+                    self.buttonUp(button)
+                }
             }
             let layoutPan = UIPanGestureRecognizer(target: self, action: #selector(layoutPanChanged(_:)))
             layoutPan.cancelsTouchesInView = false
@@ -1210,6 +1239,39 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         onAction?(action, false)
     }
 
+    @objc private func dodgeTouchBegan(_ sender: UIButton, forEvent event: UIEvent) {
+        guard !editingLayout, !menuInteractionActive,
+              let button = sender as? UT99TouchActionButton,
+              let touch = event.touches(for: sender)?.first else { return }
+        dodgeTouchOrigin = touch.location(in: self)
+        if touchConfiguration.dodgeHaptics { dodgeHaptic.prepare() }
+        updateAppearance(of: button, for: .dodge, pressed: true)
+    }
+
+    @objc private func dodgeTouchMoved(_ sender: UIButton, forEvent event: UIEvent) {
+        guard !editingLayout, let origin = dodgeTouchOrigin,
+              let button = sender as? UT99TouchActionButton,
+              let touch = event.touches(for: sender)?.first else { return }
+        let location = touch.location(in: self)
+        guard let direction = UT99DodgeGesture.direction(
+            for: CGPoint(x: location.x - origin.x, y: location.y - origin.y),
+            threshold: CGFloat(touchConfiguration.dodgeSwipeDistance),
+            sideOnly: touchConfiguration.dodgeSideOnly
+        ) else { return }
+        // Fire the moment the swipe commits rather than on lift, and only
+        // once per touch: a second dodge needs a fresh swipe.
+        dodgeTouchOrigin = nil
+        if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
+        onDodge?(direction)
+        updateAppearance(of: button, for: .dodge, pressed: false)
+    }
+
+    @objc private func dodgeTouchEnded(_ sender: UIButton) {
+        dodgeTouchOrigin = nil
+        guard let button = sender as? UT99TouchActionButton else { return }
+        updateAppearance(of: button, for: .dodge, pressed: false)
+    }
+
     /// Release every host-owned gameplay input before a menu, lifecycle
     /// transition, or controller takeover. UIKit does not guarantee that a
     /// button receives touchUp after another view becomes interactive, so the
@@ -1225,6 +1287,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             }
         }
         moveAnchor = nil
+        dodgeTouchOrigin = nil
+        if let dodge = buttons[.dodge] { updateAppearance(of: dodge, for: .dodge, pressed: false) }
         finishLookInput()
         accessibilityMovement = .zero
         pointerLastLocation = nil
@@ -1254,6 +1318,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .jump: "JUMP"
         case .use: "USE"
         case .crouch: "DUCK"
+        case .dodge: "DODGE"
         case .nextWeapon: "WPN +"
         case .previousWeapon: "WPN −"
         case .scoreboard: "SCORE"
@@ -1268,6 +1333,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .jump: "arrow.up"
         case .use: "hand.tap.fill"
         case .crouch: "arrow.down"
+        case .dodge: "arrow.left.and.right"
         case .nextWeapon: "chevron.forward"
         case .previousWeapon: "chevron.backward"
         case .scoreboard: "list.number"
@@ -1293,6 +1359,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .jump: "Jumps"
         case .use: "Activates doors, lifts, and inventory"
         case .crouch: "Crouches while held"
+        case .dodge: "Swipe left or right to side dodge, or up or down to dodge forward or back"
         case .nextWeapon: "Selects the next weapon"
         case .previousWeapon: "Selects the previous weapon"
         case .scoreboard: "Shows the match scoreboard"
@@ -1310,6 +1377,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .primaryFire, .leftPrimaryFire: UIColor(red: 0.08, green: 0.56, blue: 0.29, alpha: 0.92)
         case .alternateFire: UIColor(red: 0.78, green: 0.10, blue: 0.13, alpha: 0.92)
         case .jump, .crouch: UIColor(white: 0.72, alpha: 0.92)
+        case .dodge: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
         case .use, .scoreboard, .nextWeapon, .previousWeapon: UIColor(white: 0.22, alpha: 0.88)
         case .pause: UIColor(white: 0.28, alpha: 0.92)
         }

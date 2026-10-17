@@ -173,6 +173,8 @@ enum UT99EctoPadReferenceLayout {
             frame("alternateFire", 0.8100000000, 0.7000000000, 76, 76),
             frame("jump", 0.9661016949, 0.5100000000, 62, 62),
             frame("crouch", 0.9661016949, 0.6200000000, 62, 62),
+            // DODGE sits directly above JUMP for a short dodge-then-jump hop.
+            frame("dodge", 0.9661016949, 0.4000000000, 62, 62),
             frame("pause", 0.9400000000, 0.1050000000, 134, 62),
             // UT has four low-frequency utility actions that map cleanly to
             // EctoPad's four-direction pad. Weapon cycling belongs on left /
@@ -222,6 +224,9 @@ enum UT99EctoPadReferenceLayout {
         let crouch = CGRect(x: fire.minX - small - 8 * scale,
                             y: fire.minY - small + 8,
                             width: small, height: small)
+        let dodge = CGRect(x: fire.maxX - medium,
+                           y: jump.minY - medium - 8 * scale,
+                           width: medium, height: medium)
         let d = 36 * scale
         let dCenter = CGPoint(x: move.maxX + 18 * scale + 1.5 * d, y: move.midY)
         let startWidth = 92 * scale
@@ -232,6 +237,7 @@ enum UT99EctoPadReferenceLayout {
             "alternateFire": alt,
             "jump": jump,
             "crouch": crouch,
+            "dodge": dodge,
             "pause": CGRect(x: midX - startWidth / 2,
                               y: minY + margin,
                               width: startWidth, height: small),

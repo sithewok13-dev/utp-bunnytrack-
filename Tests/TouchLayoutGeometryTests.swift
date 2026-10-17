@@ -13,7 +13,7 @@ private func near(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat = 0.02) -> 
 }
 
 private let actionIDs: Set<String> = [
-    "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "use",
+    "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "use",
     "nextWeapon", "previousWeapon", "scoreboard", "pause",
 ]
 
@@ -74,7 +74,7 @@ require(tablet["pause"]!.width == 134 && tablet["pause"]!.height == 62,
 // The reference's physical A/B/X/Y cluster overlaps visually. UT maps these to
 // independent touch actions, so every visible right-side control must own an
 // unambiguous hit region.
-let rightControls = ["primaryFire", "alternateFire", "jump", "crouch", "pause"]
+let rightControls = ["primaryFire", "alternateFire", "jump", "crouch", "dodge", "pause"]
 for (offset, firstKey) in rightControls.enumerated() {
     for secondKey in rightControls.dropFirst(offset + 1) {
         require(!tablet[firstKey]!.intersects(tablet[secondKey]!),
@@ -91,7 +91,7 @@ let tabletLookArea = CGRect(
     width: tabletSafe.width * 0.26,
     height: tabletSafe.height * 0.58
 )
-for key in ["primaryFire", "alternateFire", "jump", "crouch", "pause"] {
+for key in ["primaryFire", "alternateFire", "jump", "crouch", "dodge", "pause"] {
     require(!tablet[key]!.intersects(tabletLookArea),
             "iPad \(key) intrudes into the lower-right look area")
 }
@@ -136,6 +136,9 @@ verifyContained(phoneLeft, in: phoneSafe, name: "iPhone southpaw")
 verifyMirror(right: phone, left: phoneLeft, safe: phoneSafe, name: "iPhone")
 require(phone["primaryFire"]!.width > phone["alternateFire"]!.width, "phone fire hierarchy collapsed")
 require(phone["leftPrimaryFire"]!.midX < phoneSafe.midX, "phone duplicate FIRE left the movement side")
+require(!phone["dodge"]!.intersects(phone["jump"]!), "phone DODGE overlaps JUMP")
+require(phone["dodge"]!.maxY < phone["jump"]!.minY, "phone DODGE must sit above JUMP")
+require(tablet["dodge"]!.maxY < tablet["jump"]!.minY, "iPad DODGE must sit above JUMP")
 
 // Preserve coverage for the generic custom-placement collision solver used by
 // imported profiles and editor scaling.
@@ -152,4 +155,4 @@ let fitted = UT99TouchLayoutGeometry.fittedScale(
 let customFrames = UT99TouchLayoutGeometry.frames(scale: fitted, controls: customControls)
 require(UT99TouchLayoutGeometry.collisionPairs(in: customFrames).isEmpty, "custom placement solver regressed")
 
-print("UT99 reference touch geometry PASS controls=11 tablet=true phone=true southpaw=true lookArea=screen")
+print("UT99 reference touch geometry PASS controls=12 tablet=true phone=true southpaw=true lookArea=screen")

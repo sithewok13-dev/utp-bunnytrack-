@@ -47,6 +47,13 @@ final class UT99EngineBridge {
     private var handle: UnsafeMutableRawPointer?
     private var metalShimHandle: UnsafeMutableRawPointer?
     private var movementKeys = Set<Int32>()
+    /// Guards `movementKeys` and `dodgeKeys`: a dodge's later key edges run on
+    /// `dodgeQueue` while the stick keeps publishing from the main thread.
+    private let movementKeyLock = NSLock()
+    /// Keys an in-flight dodge owns. The stick still records what it wants
+    /// for them, but only the dodge pushes their edges until it finishes.
+    private var dodgeKeys = Set<Int32>()
+    private let dodgeQueue = DispatchQueue(label: "com.ut99apple.touch-dodge", qos: .userInteractive)
     private let controllerLookQueue = DispatchQueue(label: "com.ut99apple.controller-look", qos: .userInteractive)
     private var controllerLookValue = CGPoint.zero
     private var controllerLookTimer: DispatchSourceTimer?
@@ -498,6 +505,7 @@ final class UT99EngineBridge {
         case .jump: pushKey(key: 32, pressed: pressed) // Space=Jump
         case .use: pushKey(key: 13, pressed: pressed) // Enter=InventoryActivate
         case .crouch: pushKey(key: 99, pressed: pressed) // C=Duck
+        case .dodge: break // Directional; the DODGE pad publishes through publishTouchDodge.
         case .nextWeapon: if pressed { pushMouseWheel(y: -1) } // MouseWheelDown
         case .previousWeapon: if pressed { pushMouseWheel(y: 1) } // MouseWheelUp
         case .scoreboard: pushKey(key: 1 << 30 | 58, pressed: pressed) // F1=ShowScores
@@ -513,24 +521,97 @@ final class UT99EngineBridge {
         let deadZone = CGFloat(UT99TouchConfiguration.load().movementDeadZone)
         var desired = Set<Int32>()
         if active {
-            if value.y > deadZone { desired.insert((1 << 30) | 82) } // Up: MoveForward
-            if value.y < -deadZone { desired.insert((1 << 30) | 81) } // Down: MoveBackward
-            if value.x < -deadZone { desired.insert((1 << 30) | 80) } // Left: StrafeLeft
-            if value.x > deadZone { desired.insert((1 << 30) | 79) } // Right: StrafeRight
+            if value.y > deadZone { desired.insert(Self.movementKey(for: .forward)) }
+            if value.y < -deadZone { desired.insert(Self.movementKey(for: .back)) }
+            if value.x < -deadZone { desired.insert(Self.movementKey(for: .left)) }
+            if value.x > deadZone { desired.insert(Self.movementKey(for: .right)) }
         }
+        movementKeyLock.lock()
+        defer { movementKeyLock.unlock() }
         if desired != movementKeys {
             NSLog("UT99TouchBridge movement x=%.3f y=%.3f active=%@ held=%@",
                   value.x, value.y, active ? "true" : "false",
                   desired.sorted().map(String.init).joined(separator: ","))
         }
-        for key in movementKeys.subtracting(desired) { pushKey(key: key, pressed: false) }
-        for key in desired.subtracting(movementKeys) { pushKey(key: key, pressed: true) }
+        for key in movementKeys.subtracting(desired) where !dodgeKeys.contains(key) {
+            pushKey(key: key, pressed: false)
+        }
+        for key in desired.subtracting(movementKeys) where !dodgeKeys.contains(key) {
+            pushKey(key: key, pressed: true)
+        }
         movementKeys = desired
     }
 
     func releaseMovementKeys() {
-        for key in movementKeys { pushKey(key: key, pressed: false) }
+        movementKeyLock.lock()
+        defer { movementKeyLock.unlock() }
+        // An in-flight dodge releases its own keys when it hands them back.
+        for key in movementKeys where !dodgeKeys.contains(key) { pushKey(key: key, pressed: false) }
         movementKeys.removeAll()
+    }
+
+    /// The verified v469e User.ini binds movement to the arrow keys.
+    private static func movementKey(for direction: UT99DodgeDirection) -> Int32 {
+        switch direction {
+        case .forward: (1 << 30) | 82 // Up: MoveForward
+        case .back: (1 << 30) | 81 // Down: MoveBackward
+        case .left: (1 << 30) | 80 // Left: StrafeLeft
+        case .right: (1 << 30) | 79 // Right: StrafeRight
+        }
+    }
+
+    /// Reproduce a keyboard double-tap on one movement key, which is how the
+    /// original PlayerPawn recognizes a dodge. The engine stays unmodified and
+    /// sees exactly what a player double-tapping an arrow key would produce.
+    /// Edges after the first run on `dodgeQueue` because the SDL entry owns
+    /// the main run loop during gameplay. Returns false while a previous
+    /// dodge is still being delivered.
+    @discardableResult
+    func publishTouchDodge(_ direction: UT99DodgeDirection, stepMilliseconds: Int) -> Bool {
+        let target = Self.movementKey(for: direction)
+        let opposite = Self.movementKey(for: direction.opposite)
+        func key(_ role: UT99DodgePlan.Key) -> Int32 { role == .target ? target : opposite }
+
+        movementKeyLock.lock()
+        guard dodgeKeys.isEmpty else {
+            movementKeyLock.unlock()
+            NSLog("UT99TouchBridge dodge direction=%@ ignored=busy", direction.rawValue)
+            return false
+        }
+        dodgeKeys = [target, opposite]
+        let targetHeld = movementKeys.contains(target)
+        let oppositeHeld = movementKeys.contains(opposite)
+        let edges = UT99DodgePlan.edges(targetHeld: targetHeld, oppositeHeld: oppositeHeld,
+                                        stepMilliseconds: stepMilliseconds)
+        let duration = UT99DodgePlan.durationMilliseconds(targetHeld: targetHeld, oppositeHeld: oppositeHeld,
+                                                          stepMilliseconds: stepMilliseconds)
+        NSLog("UT99TouchBridge dodge direction=%@ step=%d targetHeld=%@ oppositeHeld=%@",
+              direction.rawValue, stepMilliseconds,
+              targetHeld ? "true" : "false", oppositeHeld ? "true" : "false")
+        let start = DispatchTime.now()
+        for edge in edges where edge.atMilliseconds == 0 {
+            pushKey(key: key(edge.key), pressed: edge.pressed)
+        }
+        movementKeyLock.unlock()
+
+        for edge in edges where edge.atMilliseconds > 0 {
+            dodgeQueue.asyncAfter(deadline: start + .milliseconds(edge.atMilliseconds)) { [weak self] in
+                guard let self else { return }
+                self.movementKeyLock.lock()
+                defer { self.movementKeyLock.unlock() }
+                self.pushKey(key: key(edge.key), pressed: edge.pressed)
+            }
+        }
+        dodgeQueue.asyncAfter(deadline: start + .milliseconds(duration)) { [weak self] in
+            guard let self else { return }
+            self.movementKeyLock.lock()
+            defer { self.movementKeyLock.unlock() }
+            let restore = UT99DodgePlan.restore(targetHeld: self.movementKeys.contains(target),
+                                                oppositeHeld: self.movementKeys.contains(opposite))
+            for edge in restore { self.pushKey(key: key(edge.key), pressed: edge.pressed) }
+            self.dodgeKeys.removeAll()
+        }
+        return true
     }
 
     func publishTouchLook(_ value: CGPoint, active: Bool) {

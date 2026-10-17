@@ -702,6 +702,14 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             }
             self.engineBridge.publishTouchAction(action, pressed: pressed)
         }
+        touchOverlay.onDodge = { [weak self] direction in
+            guard let self, !self.originalMenuInputActive else { return }
+            NSLog("UT99 touch dodge direction=%@", direction.rawValue)
+            self.engineBridge.publishTouchDodge(
+                direction,
+                stepMilliseconds: self.touchOverlay.touchConfiguration.dodgeStepMilliseconds
+            )
+        }
         touchOverlay.onMove = { [weak self] value, active in
             guard let self else { return }
             if self.originalMenuInputActive {
@@ -3271,6 +3279,40 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         touchEnabled.accessibilityLabel = "Touch controls enabled"
         touchEnabled.addTarget(self, action: #selector(touchEnabledChanged(_:)), for: .valueChanged)
 
+        let dodgeConfiguration = touchOverlay.touchConfiguration
+        let dodgeVisible = UISwitch()
+        dodgeVisible.isOn = touchOverlay.isActionVisible(.dodge)
+        dodgeVisible.accessibilityLabel = "Show DODGE swipe pad"
+        dodgeVisible.addTarget(self, action: #selector(touchDodgeVisibleChanged(_:)), for: .valueChanged)
+
+        let dodgeDistance = touchSettingsSegments(
+            Self.dodgeSwipeDistanceOptions.map { $0.title },
+            selected: Self.nearestOptionIndex(
+                Self.dodgeSwipeDistanceOptions.map { $0.value }, to: dodgeConfiguration.dodgeSwipeDistance
+            )
+        )
+        dodgeDistance.accessibilityLabel = "Dodge swipe distance"
+        dodgeDistance.addTarget(self, action: #selector(touchDodgeDistanceChanged(_:)), for: .valueChanged)
+
+        let dodgeSpacing = touchSettingsSegments(
+            Self.dodgeStepOptions.map { "\($0) ms" },
+            selected: Self.nearestOptionIndex(
+                Self.dodgeStepOptions.map { Double($0) }, to: Double(dodgeConfiguration.dodgeStepMilliseconds)
+            )
+        )
+        dodgeSpacing.accessibilityLabel = "Dodge tap spacing"
+        dodgeSpacing.addTarget(self, action: #selector(touchDodgeSpacingChanged(_:)), for: .valueChanged)
+
+        let dodgeSideOnly = UISwitch()
+        dodgeSideOnly.isOn = dodgeConfiguration.dodgeSideOnly
+        dodgeSideOnly.accessibilityLabel = "Side dodges only"
+        dodgeSideOnly.addTarget(self, action: #selector(touchDodgeSideOnlyChanged(_:)), for: .valueChanged)
+
+        let dodgeHaptics = UISwitch()
+        dodgeHaptics.isOn = dodgeConfiguration.dodgeHaptics
+        dodgeHaptics.accessibilityLabel = "Dodge haptic"
+        dodgeHaptics.addTarget(self, action: #selector(touchDodgeHapticsChanged(_:)), for: .valueChanged)
+
         let edit = touchSettingsButton("Arrange Controls", symbol: "move.3d", selector: #selector(editTouchLayoutFromSettings))
         let saved = touchSettingsButton("Saved Layouts", symbol: "square.and.arrow.down", selector: #selector(showNamedTouchProfilesFromSettings))
         let reset = touchSettingsButton("Restore Default Layout", symbol: "arrow.counterclockwise", selector: #selector(resetTouchLayoutFromSettings))
@@ -3282,6 +3324,12 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsRow(title: "Look acceleration", control: lookAcceleration),
             touchSettingsRow(title: "Move sensitivity", control: moveSensitivity),
             touchSettingsRow(title: "Invert vertical look", control: invertLook),
+            touchSettingsSection("DODGE"),
+            touchSettingsRow(title: "DODGE swipe pad", control: dodgeVisible),
+            touchSettingsRow(title: "Swipe distance", control: dodgeDistance),
+            touchSettingsRow(title: "Tap spacing", control: dodgeSpacing),
+            touchSettingsRow(title: "Side dodges only", control: dodgeSideOnly),
+            touchSettingsRow(title: "Dodge haptic", control: dodgeHaptics),
             touchSettingsSection("TOUCH LAYOUT"),
             touchSettingsRow(title: "Touch controls", control: touchEnabled),
             touchSettingsRow(title: "Opacity", control: opacity),
@@ -3358,6 +3406,19 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         return row
     }
 
+    private func touchSettingsSegments(_ titles: [String], selected: Int) -> UISegmentedControl {
+        let control = UISegmentedControl(items: titles)
+        control.selectedSegmentIndex = selected
+        control.selectedSegmentTintColor = UIColor(red: 0.10, green: 0.67, blue: 0.92, alpha: 1)
+        control.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
+        control.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+        return control
+    }
+
+    private static func nearestOptionIndex(_ values: [Double], to value: Double) -> Int {
+        values.indices.min { abs(values[$0] - value) < abs(values[$1] - value) } ?? 0
+    }
+
     private func touchSettingsSection(_ title: String) -> UIView {
         let label = UILabel()
         label.text = title
@@ -3423,6 +3484,44 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         touchOverlay.setTouchConfiguration(configuration)
     }
 
+    /// Short / medium / long swipe before DODGE commits, in points.
+    private static let dodgeSwipeDistanceOptions: [(title: String, value: Double)] = [
+        ("Short", 12), ("Medium", 18), ("Long", 26),
+    ]
+    /// Raise the spacing if dodges are missed at low frame rates; each tap
+    /// edge must outlast one engine frame.
+    private static let dodgeStepOptions = [35, 50, 70]
+
+    @objc private func touchDodgeVisibleChanged(_ sender: UISwitch) {
+        touchOverlay.setAction(.dodge, visible: sender.isOn)
+    }
+
+    @objc private func touchDodgeDistanceChanged(_ sender: UISegmentedControl) {
+        guard Self.dodgeSwipeDistanceOptions.indices.contains(sender.selectedSegmentIndex) else { return }
+        var configuration = touchOverlay.touchConfiguration
+        configuration.dodgeSwipeDistance = Self.dodgeSwipeDistanceOptions[sender.selectedSegmentIndex].value
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchDodgeSpacingChanged(_ sender: UISegmentedControl) {
+        guard Self.dodgeStepOptions.indices.contains(sender.selectedSegmentIndex) else { return }
+        var configuration = touchOverlay.touchConfiguration
+        configuration.dodgeStepMilliseconds = Self.dodgeStepOptions[sender.selectedSegmentIndex]
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchDodgeSideOnlyChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.dodgeSideOnly = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchDodgeHapticsChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.dodgeHaptics = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
     @objc private func touchInvertLookChanged(_ sender: UISwitch) {
         UserDefaults.standard.set(sender.isOn, forKey: "ut99.input.invertLookY")
     }
@@ -3482,12 +3581,16 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         let invert = UserDefaults.standard.bool(forKey: "ut99.input.invertLookY")
         let sensitivityText = String(format: "%.2gx", sensitivity)
         let configuration = UT99TouchConfiguration.load()
+        var dodgeText = String(format: "%.0f pt swipe, %d ms taps",
+                               configuration.dodgeSwipeDistance, configuration.dodgeStepMilliseconds)
+        if configuration.dodgeSideOnly { dodgeText += ", side only" }
         return "Touch controls, Apple controllers, iPad keyboard, and pointer-look use the UT99 input bridge.\n\nSensitivity: " + sensitivityText +
             "\nAcceleration: " + String(format: "%.2g", configuration.lookAcceleration) +
             "\nLook dead zone: " + String(format: "%.4f", configuration.lookDeadZone) +
             "\nMove dead zone: " + String(format: "%.0f%%", configuration.movementDeadZone * 100) +
             "\nInvert Y: " + (invert ? "On" : "Off") +
-            "\nController auto-hide: " + (configuration.autoHideForController ? "On" : "Off")
+            "\nController auto-hide: " + (configuration.autoHideForController ? "On" : "Off") +
+            "\nDodge: " + dodgeText
     }
 
     private func presentActionSheet(_ alert: UIAlertController) {

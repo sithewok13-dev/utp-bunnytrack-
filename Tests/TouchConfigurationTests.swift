@@ -77,7 +77,99 @@ private enum TouchConfigurationTests {
         require(menuDrift.x == 0 && menuDrift.y == 0, "menu cursor resting drift was not suppressed")
         require(menuMove.x == 0.20 && menuMove.y == 0.03, "menu cursor deliberate movement changed")
 
-        print("UT99 touch configuration PASS persistence=true migration=true clamping=true deadZone=true acceleration=true invertY=true floatingCurve=true controllerCardinal=true")
+        verifyDodge(defaults: defaults)
+
+        print("UT99 touch configuration PASS persistence=true migration=true clamping=true deadZone=true acceleration=true invertY=true floatingCurve=true controllerCardinal=true dodge=true")
+    }
+
+    private static func verifyDodge(defaults: UserDefaults) {
+        // Configurations saved before the DODGE pad existed must still load,
+        // picking up the standard dodge settings.
+        let legacyJSON = """
+        {"leftHanded":true,"hiddenActions":["scoreboard"],"lookAcceleration":0.45,\
+        "lookDeadZone":0.00025,"movementDeadZone":0.04,"autoHideForController":true}
+        """
+        defaults.set(Data(legacyJSON.utf8), forKey: UT99TouchConfiguration.defaultsKey)
+        let migrated = UT99TouchConfiguration.load(from: defaults)
+        require(migrated.leftHanded, "legacy configuration lost its saved fields")
+        require(migrated.dodgeSwipeDistance == 18 && !migrated.dodgeSideOnly &&
+                migrated.dodgeHaptics && migrated.dodgeStepMilliseconds == 50,
+                "legacy configuration did not take standard dodge settings")
+        require(!migrated.hiddenActions.contains("dodge"), "DODGE must be visible by default")
+
+        var dodge = UT99TouchConfiguration.standard
+        dodge.dodgeSwipeDistance = 26
+        dodge.dodgeSideOnly = true
+        dodge.dodgeHaptics = false
+        dodge.dodgeStepMilliseconds = 70
+        dodge.hiddenActions = ["dodge"]
+        dodge.save(to: defaults)
+        require(UT99TouchConfiguration.load(from: defaults) == dodge, "dodge settings did not persist")
+
+        var unsafe = dodge
+        unsafe.dodgeSwipeDistance = 500
+        unsafe.dodgeStepMilliseconds = 1
+        require(unsafe.sanitized().dodgeSwipeDistance == 48, "dodge swipe upper bound missing")
+        require(unsafe.sanitized().dodgeStepMilliseconds == UT99DodgePlan.minimumStepMilliseconds,
+                "dodge step lower bound missing")
+        unsafe.dodgeSwipeDistance = 0
+        unsafe.dodgeStepMilliseconds = 900
+        require(unsafe.sanitized().dodgeSwipeDistance == 8, "dodge swipe lower bound missing")
+        require(unsafe.sanitized().dodgeStepMilliseconds == UT99DodgePlan.maximumStepMilliseconds,
+                "dodge step upper bound missing")
+        require(UT99DodgePlan.maximumStepMilliseconds * 2 < UT99DodgePlan.dodgeClickWindowMilliseconds,
+                "slowest double-tap would miss DodgeClickTime")
+
+        // UIKit Y grows downward: a negative Y is an upward (forward) swipe.
+        func classify(_ x: CGFloat, _ y: CGFloat, sideOnly: Bool = false) -> UT99DodgeDirection? {
+            UT99DodgeGesture.direction(for: CGPoint(x: x, y: y), threshold: 18, sideOnly: sideOnly)
+        }
+        require(classify(-18, 0) == .left && classify(18, 0) == .right, "side swipes misclassified")
+        require(classify(0, -18) == .forward && classify(0, 18) == .back, "vertical swipes misclassified")
+        require(classify(-17.9, 0) == nil && classify(0, 0) == nil, "swipe fired before the threshold")
+        require(classify(-20, -12) == .left, "a slightly rising side swipe must stay a side dodge")
+        require(classify(10, -24) == .forward, "dominant vertical swipe misclassified")
+        require(classify(0, -40, sideOnly: true) == nil, "side-only mode fired a forward dodge")
+        require(classify(-22, 30, sideOnly: true) == nil, "side-only mode fired on a mostly vertical swipe")
+        require(classify(30, -22, sideOnly: true) == .right, "side-only mode dropped a side swipe")
+        for direction in UT99DodgeDirection.allCases {
+            require(direction.opposite.opposite == direction && direction.opposite != direction,
+                    "dodge opposite is not an involution")
+        }
+
+        // Idle stick: down, up, down on separate steps.
+        typealias Edge = UT99DodgePlan.Edge
+        require(UT99DodgePlan.edges(targetHeld: false, oppositeHeld: false, stepMilliseconds: 50) == [
+            Edge(atMilliseconds: 0, key: .target, pressed: true),
+            Edge(atMilliseconds: 50, key: .target, pressed: false),
+            Edge(atMilliseconds: 100, key: .target, pressed: true),
+        ], "idle double-tap plan changed")
+        require(UT99DodgePlan.durationMilliseconds(targetHeld: false, oppositeHeld: false, stepMilliseconds: 50) == 150,
+                "idle dodge must hold the second tap for one step")
+        // The stick already strafes toward the dodge and away from it: lift
+        // both first so the tap starts from a clean key-up.
+        let held = UT99DodgePlan.edges(targetHeld: true, oppositeHeld: true, stepMilliseconds: 40)
+        require(held == [
+            Edge(atMilliseconds: 0, key: .target, pressed: false),
+            Edge(atMilliseconds: 0, key: .opposite, pressed: false),
+            Edge(atMilliseconds: 40, key: .target, pressed: true),
+            Edge(atMilliseconds: 80, key: .target, pressed: false),
+            Edge(atMilliseconds: 120, key: .target, pressed: true),
+        ], "held-stick double-tap plan changed")
+        let presses = held.filter { $0.key == .target && $0.pressed }.map(\.atMilliseconds)
+        require(presses.count == 2 && presses[1] - presses[0] < UT99DodgePlan.dodgeClickWindowMilliseconds,
+                "double-tap presses fall outside DodgeClickTime")
+        let clamped = UT99DodgePlan.edges(targetHeld: false, oppositeHeld: false, stepMilliseconds: 5)
+        require(clamped.map(\.atMilliseconds) == [0, 20, 40], "dodge step was not clamped")
+
+        // Hand-back after the tap: the target is physically down, the
+        // opposite is up; both return to whatever the stick holds now.
+        require(UT99DodgePlan.restore(targetHeld: true, oppositeHeld: false).isEmpty,
+                "restore must leave a still-held target down")
+        let released = UT99DodgePlan.restore(targetHeld: false, oppositeHeld: true)
+        require(released.count == 2 && released[0].key == .target && !released[0].pressed &&
+                released[1].key == .opposite && released[1].pressed,
+                "restore must lift the target and give the opposite back to the stick")
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
