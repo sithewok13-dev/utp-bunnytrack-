@@ -1,0 +1,38 @@
+name: Host compile
+
+# Compile-only check for the native host on a GitHub macOS runner. The engine
+# image and game data are not embedded (UT99_ENGINE_EMBED is unset) and
+# nothing is signed or uploaded: this proves the Swift sources and the
+# standalone touch tests build, not that a playable app was produced.
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-compile:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Xcode
+        run: xcodebuild -version
+      - name: Touch configuration tests
+        run: ./Tests/test_touch_configuration.sh
+      - name: Touch layout geometry tests
+        run: ./Tests/test_touch_layout_geometry.sh
+      - name: Touch profile tests
+        run: ./Tests/test_touch_profiles.sh
+      - name: Compile host for the iOS Simulator
+        run: |
+          xcodebuild \
+            -project UT99Apple.xcodeproj \
+            -target UT99Apple \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build
