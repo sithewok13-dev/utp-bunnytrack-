@@ -19,8 +19,13 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Show Xcode
-        run: xcodebuild -version
+      - name: Select newest Xcode
+        # The host uses iOS 26 SDK API (for example .allowBluetoothHFP), so
+        # the runner's default Xcode is not enough.
+        run: |
+          newest="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$newest"
+          xcodebuild -version
       - name: Touch configuration tests
         run: ./Tests/test_touch_configuration.sh
       - name: Touch layout geometry tests
