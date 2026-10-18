@@ -52,13 +52,6 @@ private final class UT99GameSurfaceInputView: UIView {
     var fingerMenuEnabled = false
     /// A finger tap clicks here (move, press, spaced release).
     var onMenuClick: ((CGPoint) -> Void)?
-    /// Re-anchor UWindow's relative cursor on the next finger touch. The
-    /// anchor sweeps the cursor through the top-left corner, where the menu
-    /// bar's Game item lives, so it must never run while a pulldown may be
-    /// open: only when menus are (re)entered or after a long idle.
-    var menuPointerNeedsAnchor = true
-    private var lastMenuTouchEnd: CFTimeInterval = 0
-    static let menuAnchorIdleSeconds: CFTimeInterval = 20
     private weak var trackedTouch: UITouch?
     /// The finger currently driving UT's menus directly: tap clicks, drag
     /// holds the left button (scrollbars, sliders), long press right-clicks.
@@ -173,12 +166,11 @@ private final class UT99GameSurfaceInputView: UIView {
         menuTouchDragging = false
         menuTouchLongPressed = false
         // Put UWindow's cursor under the finger first so the item highlights
-        // before any click, as a mouse hover would. Move relative to where
-        // the cursor already is; anchor only when it may have drifted.
-        let anchor = menuPointerNeedsAnchor ||
-            menuTouchStartTime - lastMenuTouchEnd > Self.menuAnchorIdleSeconds
-        menuPointerNeedsAnchor = false
-        onPointer?(location, nil, anchor)
+        // before any click, as a mouse hover would. UWindow's cursor is
+        // relative and does not follow host deltas exactly, so every touch
+        // re-anchors it (as the trackpad path does); within the touch the
+        // click lands on that same point.
+        onPointer?(location, nil, true)
         menuHaptic.prepare()
         let link = CADisplayLink(target: self, selector: #selector(menuLongPressTick))
         link.add(to: .main, forMode: .common)
@@ -219,11 +211,12 @@ private final class UT99GameSurfaceInputView: UIView {
     private func endMenuTouch(_ touch: UITouch, cancelled: Bool) {
         let location = touch.location(in: self)
         stopMenuLongPressTimer()
-        lastMenuTouchEnd = CACurrentMediaTime()
         if menuTouchDragging {
             onPointer?(location, false, false)
         } else if !menuTouchLongPressed && !cancelled {
-            onMenuClick?(location)
+            // Click the anchored, highlighted point; a finger that shifted a
+            // few points while lifting must not nudge the relative cursor.
+            onMenuClick?(menuTouchStart)
         }
         menuTouch = nil
         menuTouchDragging = false
@@ -292,7 +285,6 @@ private final class UT99GameSurfaceInputView: UIView {
         guard inputMode != mode else { return }
         releasePointer()
         inputMode = mode
-        menuPointerNeedsAnchor = true
         accessibilityIdentifier = mode == .originalMenu
             ? "ut99.gameSurfacePointer"
             : "ut99.touch.lookArea"
@@ -5572,8 +5564,6 @@ extension GameViewController: UITextFieldDelegate {
         let previous = lastViewportGameplayCapture
         lastViewportGameplayCapture = captured
         guard let previous, previous != captured else { return }
-        // Gameplay moved UWindow's cursor out from under the host's record.
-        gameSurfaceInputView.menuPointerNeedsAnchor = true
         let automatic = touchOverlay.touchConfiguration.autoMenuSwitch
         NSLog("UT99 engine viewport capture changed captured=%@ autoSwitch=%@ mode=%@",
               captured ? "true" : "false", automatic ? "true" : "false",
