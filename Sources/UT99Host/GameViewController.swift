@@ -95,6 +95,9 @@ private final class UT99GameSurfaceInputView: UIView {
         guard trackedTouch == nil,
               let touch = touches.first(where: { $0.type != .indirectPointer }) else { return }
         let location = touch.location(in: self)
+        NSLog("UT99 surface touch began x=%.1f y=%.1f mode=%@ fingerMenu=%@",
+              location.x, location.y, inputMode == .originalMenu ? "menu" : "gameplay",
+              fingerMenuEnabled ? "true" : "false")
         if inputMode == .originalMenu {
             if fingerMenuEnabled { beginMenuTouch(touch, at: location) }
             return
@@ -5548,6 +5551,7 @@ extension GameViewController: UITextFieldDelegate {
         let now = CACurrentMediaTime()
         guard now - lastHostWatchTick >= 0.25 else { return }
         lastHostWatchTick = now
+        if isEngineActive { keepHostWindowAboveEngine() }
         updateTouchFirstChrome()
         if hostState == .running {
             followEngineMenuState()
@@ -5560,11 +5564,43 @@ extension GameViewController: UITextFieldDelegate {
         }
     }
 
-    /// Show the three-dot button only when MENU is not on screen, and the
+    /// SDL's renderer window must stay below the host window and never take
+    /// touches: if it rises above, it swallows every touch over the game
+    /// picture and turns them into mouse clicks at the wrong scale. SDL can
+    /// recreate or reorder its window at any time, so re-check continuously.
+    private func keepHostWindowAboveEngine() {
+        guard let hostWindow = view.window, let scene = hostWindow.windowScene else { return }
+        var corrected: [String] = []
+        if hostWindow.isHidden {
+            hostWindow.isHidden = false
+            corrected.append("host-unhidden")
+        }
+        for window in scene.windows where window !== hostWindow {
+            if window.isUserInteractionEnabled && !(window.rootViewController is UIAlertController) &&
+                String(describing: type(of: window.rootViewController ?? UIViewController())).contains("SDL") {
+                window.isUserInteractionEnabled = false
+                corrected.append("engine-interaction-off")
+            }
+            if window.windowLevel >= hostWindow.windowLevel && !window.isHidden &&
+                String(describing: type(of: window.rootViewController ?? UIViewController())).contains("SDL") {
+                hostWindow.windowLevel = window.windowLevel + 1
+                corrected.append("host-raised-to-\(Int(hostWindow.windowLevel.rawValue))")
+            }
+        }
+        guard !corrected.isEmpty else { return }
+        NSLog("UT99 window order corrected %@ windows=%@", corrected.joined(separator: ","),
+              scene.windows.map { window -> String in
+                  let root = window.rootViewController.map { String(describing: type(of: $0)) } ?? "nil"
+                  return "\(root)@\(Int(window.windowLevel.rawValue))/touch=\(window.isUserInteractionEnabled)"
+              }.joined(separator: " "))
+    }
+
+    /// Show the three-dot button whenever MENU is not on screen and always in
+    /// UT's menus (a sure route to the host panel and Export Logs), and the
     /// keyboard chip only in UT's menus.
     private func updateTouchFirstChrome() {
         let touchMenuVisible = isEngineActive && !touchOverlay.isHidden
-        menuButton.isHidden = touchMenuVisible && hostMenuPanel == nil
+        menuButton.isHidden = touchMenuVisible && hostMenuPanel == nil && !originalMenuInputActive
         menuKeyboardChip.isHidden = !(isEngineActive && originalMenuInputActive && menuKeyboardPanel == nil &&
             consoleBar == nil && optionsTray == nil && hostMenuPanel == nil)
         if !menuKeyboardChip.isHidden { view.bringSubviewToFront(menuKeyboardChip) }
