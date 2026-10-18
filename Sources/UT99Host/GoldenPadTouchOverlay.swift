@@ -813,6 +813,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         defaults.set(profile.invertLookY, forKey: "ut99.input.invertLookY")
         touchConfiguration.save(to: defaults)
         savePlacements()
+        refreshActionTitles()
         alpha = touchOpacity
         updateLayoutModeAppearance()
         NSLog("UT99 touch named profile applied name=%@ preset=%@ placements=%lu",
@@ -832,6 +833,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         defaults.set(Double(globalScale), forKey: Self.scaleDefaultsKey)
         touchConfiguration = .standard
         touchConfiguration.save(to: defaults)
+        refreshActionTitles()
         alpha = touchOpacity
         setNeedsLayout()
     }
@@ -844,6 +846,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         placements.removeAll()
         touchConfiguration = touchConfiguration.applyingBunnyTrackPreset()
         touchConfiguration.save()
+        refreshActionTitles()
         setNeedsLayout()
         layoutIfNeeded()
         if let duplicateFire = buttons[.leftPrimaryFire], bounds.width > 0, bounds.height > 0 {
@@ -889,6 +892,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         releaseActiveInputs()
         touchConfiguration = source.sanitized()
         touchConfiguration.save()
+        refreshActionTitles()
         setNeedsLayout()
     }
 
@@ -935,8 +939,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                 ? action != .primaryFire && action != .pause
                 : touchConfiguration.hiddenActions.contains(action.rawValue)
         }
-        buttons[.primaryFire]?.setTitle(active ? "SELECT" : "FIRE")
-        buttons[.primaryFire]?.accessibilityLabel = active ? "Select" : title(for: .primaryFire)
+        refreshActionTitles()
         buttons[.primaryFire]?.accessibilityHint = active
             ? "Clicks the current Unreal Tournament menu item."
             : accessibilityHint(for: .primaryFire)
@@ -1262,10 +1265,30 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    /// With FIRE/ALT dodging on, those two buttons are one-tap side dodges
+    /// in gameplay. Menus keep FIRE as SELECT.
+    private func dodgeDirection(for action: Action) -> UT99DodgeDirection? {
+        guard touchConfiguration.fireButtonsDodge, !menuInteractionActive else { return nil }
+        switch action {
+        case .alternateFire: return .left
+        case .primaryFire: return .right
+        default: return nil
+        }
+    }
+
     @objc private func buttonDown(_ rawSender: UIButton) {
         guard !editingLayout else { return }
         guard let sender = rawSender as? UT99TouchActionButton else { return }
         guard let action = action(for: sender.tag) else { return }
+        if let direction = dodgeDirection(for: action) {
+            // A dodge is a single gesture: publish it on touch-down and hold
+            // no engine input, so the release below only restores the face.
+            if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
+            updateAppearance(of: sender, for: action, pressed: true)
+            sender.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            onDodge?(direction, false)
+            return
+        }
         activeActions.insert(action)
         actionHaptic.impactOccurred(intensity: action == .primaryFire ? 0.72 : 0.46)
         updateAppearance(of: sender, for: action, pressed: true)
@@ -1285,7 +1308,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         guard !editingLayout else { return }
         guard let sender = rawSender as? UT99TouchActionButton else { return }
         guard let action = action(for: sender.tag) else { return }
-        activeActions.remove(action)
+        let wasHeld = activeActions.remove(action) != nil
         updateAppearance(of: sender, for: action, pressed: false)
         UIView.animate(
             withDuration: 0.16,
@@ -1296,7 +1319,21 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         ) {
             sender.transform = .identity
         }
+        // A FIRE/ALT dodge never pressed an engine input, so there is nothing
+        // to release.
+        if !wasHeld && dodgeDirection(for: action) != nil { return }
         onAction?(action, false)
+    }
+
+    /// FIRE and ALT read as dodge buttons while FIRE/ALT dodging is on.
+    private func refreshActionTitles() {
+        buttons[.primaryFire]?.setTitle(menuInteractionActive ? "SELECT" : title(for: .primaryFire))
+        buttons[.primaryFire]?.accessibilityLabel = menuInteractionActive ? "Select" : title(for: .primaryFire)
+        buttons[.alternateFire]?.setTitle(title(for: .alternateFire))
+        buttons[.alternateFire]?.accessibilityLabel = title(for: .alternateFire)
+        for action in [Action.primaryFire, .alternateFire] where !menuInteractionActive {
+            buttons[action]?.accessibilityHint = accessibilityHint(for: action)
+        }
     }
 
     @objc private func dodgeTouchBegan(_ sender: UIButton, forEvent event: UIEvent) {
@@ -1373,6 +1410,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func title(for action: Action) -> String {
         switch action {
+        case .primaryFire where touchConfiguration.fireButtonsDodge: "DODGE ▶"
+        case .alternateFire where touchConfiguration.fireButtonsDodge: "◀ DODGE"
         case .primaryFire, .leftPrimaryFire: "FIRE"
         case .alternateFire: "ALT"
         case .jump: "JUMP"
@@ -1418,6 +1457,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func accessibilityHint(for action: Action) -> String {
         switch action {
+        case .primaryFire where touchConfiguration.fireButtonsDodge: "Dodges right"
+        case .alternateFire where touchConfiguration.fireButtonsDodge: "Dodges left"
         case .primaryFire, .leftPrimaryFire: "Shoots the current weapon"
         case .alternateFire: "Uses the current weapon's alternate fire"
         case .jump: "Jumps"

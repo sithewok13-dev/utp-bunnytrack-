@@ -157,7 +157,8 @@ The touch interface is designed as a full-bleed landscape overlay:
   including on servers, and hands back the small turn the flick began. A
   separate DODGE swipe pad is available in Controls & Display.
 - **Bunny Track:** Controls & Display → Apply BT Layout hides combat and
-  inventory buttons, slows the look curve, and adds a hold-to-walk WALK
+  inventory buttons, turns ALT into a one-tap left dodge and FIRE into a
+  right dodge, slows the look curve, and adds a hold-to-walk WALK
   button and a CUSTOM button that runs a console command you choose
   (default `suicide`). UTP binds those two to Home and Insert in User.ini
   each time the game starts.

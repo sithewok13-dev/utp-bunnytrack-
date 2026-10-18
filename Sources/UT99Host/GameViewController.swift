@@ -3336,6 +3336,11 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         walkVisible.accessibilityLabel = "Show WALK button"
         walkVisible.addTarget(self, action: #selector(touchWalkVisibleChanged(_:)), for: .valueChanged)
 
+        let fireButtonsDodge = UISwitch()
+        fireButtonsDodge.isOn = dodgeConfiguration.fireButtonsDodge
+        fireButtonsDodge.accessibilityLabel = "ALT dodges left and FIRE dodges right"
+        fireButtonsDodge.addTarget(self, action: #selector(touchFireButtonsDodgeChanged(_:)), for: .valueChanged)
+
         let customVisible = UISwitch()
         customVisible.isOn = touchOverlay.isActionVisible(.customCommand)
         customVisible.accessibilityLabel = "Show CUSTOM button"
@@ -3361,6 +3366,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsRow(title: "Invert vertical look", control: invertLook),
             touchSettingsSection("BUNNY TRACK"),
             bunnyTrack,
+            touchSettingsRow(title: "ALT ◀ / FIRE ▶ dodge", control: fireButtonsDodge),
             touchSettingsRow(title: "WALK button", control: walkVisible),
             touchSettingsRow(title: "CUSTOM button", control: customVisible),
             customCommand,
@@ -3553,6 +3559,14 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         configuration.flickDodgeDistance = option.distance
         configuration.flickDodgeMilliseconds = option.milliseconds
         touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchFireButtonsDodgeChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.fireButtonsDodge = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+        // ALT must be on screen to dodge left.
+        if sender.isOn { touchOverlay.setAction(.alternateFire, visible: true) }
     }
 
     @objc private func touchWalkVisibleChanged(_ sender: UISwitch) {

@@ -10,7 +10,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
     /// trick-jump run never needs, plus the DODGE pad the look-side flick
     /// replaces.
     static let bunnyTrackHiddenActions: Set<String> = [
-        "leftPrimaryFire", "alternateFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "dodge"
+        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "dodge"
     ]
     static let defaultCustomCommand = "suicide"
 
@@ -39,6 +39,8 @@ struct UT99TouchConfiguration: Codable, Equatable {
     var flickDodgeMilliseconds: Int
     /// Console command bound to the CUSTOM button's key (Insert).
     var customCommand: String
+    /// In gameplay ALT dodges left and FIRE dodges right instead of shooting.
+    var fireButtonsDodge: Bool
 
     init(
         leftHanded: Bool,
@@ -54,7 +56,8 @@ struct UT99TouchConfiguration: Codable, Equatable {
         flickDodgeEnabled: Bool = true,
         flickDodgeDistance: Double = 40,
         flickDodgeMilliseconds: Int = 150,
-        customCommand: String = UT99TouchConfiguration.defaultCustomCommand
+        customCommand: String = UT99TouchConfiguration.defaultCustomCommand,
+        fireButtonsDodge: Bool = false
     ) {
         self.leftHanded = leftHanded
         self.hiddenActions = hiddenActions
@@ -70,6 +73,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
         self.flickDodgeDistance = flickDodgeDistance
         self.flickDodgeMilliseconds = flickDodgeMilliseconds
         self.customCommand = customCommand
+        self.fireButtonsDodge = fireButtonsDodge
     }
 
     static let standard = UT99TouchConfiguration(
@@ -99,7 +103,8 @@ struct UT99TouchConfiguration: Codable, Equatable {
             flickDodgeEnabled: flickDodgeEnabled,
             flickDodgeDistance: min(max(flickDodgeDistance, 20), 90),
             flickDodgeMilliseconds: min(max(flickDodgeMilliseconds, 60), 300),
-            customCommand: UT99TouchKeyBindings.sanitizedCommand(customCommand)
+            customCommand: UT99TouchKeyBindings.sanitizedCommand(customCommand),
+            fireButtonsDodge: fireButtonsDodge
         )
     }
 
@@ -149,7 +154,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case leftHanded, hiddenActions, lookAcceleration, lookDeadZone, movementDeadZone, autoHideForController
         case dodgeSwipeDistance, dodgeSideOnly, dodgeHaptics, dodgeStepMilliseconds
-        case flickDodgeEnabled, flickDodgeDistance, flickDodgeMilliseconds, customCommand
+        case flickDodgeEnabled, flickDodgeDistance, flickDodgeMilliseconds, customCommand, fireButtonsDodge
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +182,8 @@ struct UT99TouchConfiguration: Codable, Equatable {
             ?? standard.flickDodgeMilliseconds
         customCommand = try container.decodeIfPresent(String.self, forKey: .customCommand)
             ?? standard.customCommand
+        fireButtonsDodge = try container.decodeIfPresent(Bool.self, forKey: .fireButtonsDodge)
+            ?? standard.fireButtonsDodge
     }
 
     func encode(to encoder: Encoder) throws {
@@ -195,15 +202,18 @@ struct UT99TouchConfiguration: Codable, Equatable {
         try container.encode(flickDodgeDistance, forKey: .flickDodgeDistance)
         try container.encode(flickDodgeMilliseconds, forKey: .flickDodgeMilliseconds)
         try container.encode(customCommand, forKey: .customCommand)
+        try container.encode(fireButtonsDodge, forKey: .fireButtonsDodge)
     }
 
     /// The Bunny Track preset: hide combat clutter, slow the look curve for
-    /// precise lines, and dodge with a look-side flick.
+    /// precise lines, and dodge with a look-side flick or ALT (left) and
+    /// FIRE (right).
     func applyingBunnyTrackPreset() -> UT99TouchConfiguration {
         var result = self
         result.hiddenActions = Self.bunnyTrackHiddenActions
         result.lookAcceleration = 0.2
         result.flickDodgeEnabled = true
+        result.fireButtonsDodge = true
         return result.sanitized()
     }
 }

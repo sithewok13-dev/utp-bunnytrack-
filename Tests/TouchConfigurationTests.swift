@@ -111,6 +111,7 @@ private enum TouchConfigurationTests {
         dodge.flickDodgeDistance = 55
         dodge.flickDodgeMilliseconds = 120
         dodge.customCommand = "mutate checkpoint"
+        dodge.fireButtonsDodge = true
         dodge.save(to: defaults)
         require(UT99TouchConfiguration.load(from: defaults) == dodge, "dodge settings did not persist")
 
@@ -191,6 +192,9 @@ private enum TouchConfigurationTests {
                 !preset.hiddenActions.contains("primaryFire"),
                 "BT preset hid a control a trick-jump run needs")
         require(preset.flickDodgeEnabled && preset.lookAcceleration == 0.2, "BT preset look tuning changed")
+        require(preset.fireButtonsDodge && !preset.hiddenActions.contains("alternateFire"),
+                "BT preset must show ALT and turn FIRE/ALT into side dodges")
+        require(!UT99TouchConfiguration.standard.fireButtonsDodge, "FIRE must shoot outside the BT layout")
         require(UT99TouchConfiguration.bunnyTrackHiddenActions.isSubset(of: UT99TouchConfiguration.supportedActionIDs),
                 "BT preset names an unknown control")
 
