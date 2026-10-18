@@ -2859,14 +2859,27 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             self?.reportAProblem()
         })
 
+        // A landscape phone cannot fit every action, so the list scrolls
+        // inside a panel that never extends past the bottom safe edge.
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alwaysBounceVertical = false
+        scroll.showsVerticalScrollIndicator = true
+        scroll.indicatorStyle = .white
+        scroll.addSubview(stack)
+
         panel.contentView.addSubview(title)
         panel.contentView.addSubview(close)
-        panel.contentView.addSubview(stack)
+        panel.contentView.addSubview(scroll)
         view.addSubview(panel)
         let panelWidth = min(CGFloat(330), max(CGFloat(260), view.bounds.width - 32))
+        // Prefer showing the whole list; give way to the screen edge first.
+        let fitContent = scroll.heightAnchor.constraint(equalTo: stack.heightAnchor)
+        fitContent.priority = .defaultLow
         NSLayoutConstraint.activate([
             panel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
             panel.topAnchor.constraint(equalTo: menuButton.bottomAnchor, constant: 8),
+            panel.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
             panel.widthAnchor.constraint(equalToConstant: panelWidth),
             title.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: 16),
             title.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: 14),
@@ -2874,10 +2887,16 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             close.centerYAnchor.constraint(equalTo: title.centerYAnchor),
             close.widthAnchor.constraint(equalToConstant: 38),
             close.heightAnchor.constraint(equalToConstant: 38),
-            stack.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
-            stack.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -12),
+            scroll.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: 12),
+            scroll.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -12),
+            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
+            scroll.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -12),
+            fitContent,
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
         ])
         hostMenuPanel = panel
         menuButton.accessibilityValue = "Open"
@@ -3053,6 +3072,15 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         configuration.baseBackgroundColor = UIColor(white: 0.18, alpha: 0.92)
         configuration.baseForegroundColor = .white
         configuration.cornerStyle = .medium
+        // Keep the fixed 46pt rows legible at any system text size; large
+        // Dynamic Type otherwise wrapped titles out of their buttons.
+        configuration.titleLineBreakMode = .byTruncatingTail
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 14, weight: .semibold)
+            return outgoing
+        }
+        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
             NSLog("UT99 host panel action title=%@", title)
             self?.closeHostMenuPanel()
