@@ -50,7 +50,15 @@ private final class UT99GameSurfaceInputView: UIView {
     /// surface also enters pointer mode when touch controls are hidden during
     /// gameplay, where a finger must never become a mouse click.
     var fingerMenuEnabled = false
-    private weak var trackedTouch: UITouch?
+    /// A finger tap clicks here (move, press, spaced release).
+    var onMenuClick: ((CGPoint) -> Void)?
+    /// Re-anchor UWindow's relative cursor on the next finger touch. The
+    /// anchor sweeps the cursor through the top-left corner, where the menu
+    /// bar's Game item lives, so it must never run while a pulldown may be
+    /// open: only when menus are (re)entered or after a long idle.
+    var menuPointerNeedsAnchor = true
+    private var lastMenuTouchEnd: CFTimeInterval = 0
+    static let menuAnchorIdleSeconds: CFTimeInterval = 20    private weak var trackedTouch: UITouch?
     /// The finger currently driving UT's menus directly: tap clicks, drag
     /// holds the left button (scrollbars, sliders), long press right-clicks.
     private weak var menuTouch: UITouch?
@@ -164,8 +172,12 @@ private final class UT99GameSurfaceInputView: UIView {
         menuTouchDragging = false
         menuTouchLongPressed = false
         // Put UWindow's cursor under the finger first so the item highlights
-        // before any click, as a mouse hover would.
-        onPointer?(location, nil, true)
+        // before any click, as a mouse hover would. Move relative to where
+        // the cursor already is; anchor only when it may have drifted.
+        let anchor = menuPointerNeedsAnchor ||
+            menuTouchStartTime - lastMenuTouchEnd > Self.menuAnchorIdleSeconds
+        menuPointerNeedsAnchor = false
+        onPointer?(location, nil, anchor)
         menuHaptic.prepare()
         let link = CADisplayLink(target: self, selector: #selector(menuLongPressTick))
         link.add(to: .main, forMode: .common)
@@ -200,18 +212,17 @@ private final class UT99GameSurfaceInputView: UIView {
             stopMenuLongPressTimer()
             onPointer?(menuTouchStart, true, false)
         }
-        onPointer?(location, nil, true)
+        onPointer?(location, nil, false)
     }
 
     private func endMenuTouch(_ touch: UITouch, cancelled: Bool) {
         let location = touch.location(in: self)
         stopMenuLongPressTimer()
+        lastMenuTouchEnd = CACurrentMediaTime()
         if menuTouchDragging {
             onPointer?(location, false, false)
         } else if !menuTouchLongPressed && !cancelled {
-            onPointer?(location, nil, true)
-            onPointer?(location, true, false)
-            onPointer?(location, false, false)
+            onMenuClick?(location)
         }
         menuTouch = nil
         menuTouchDragging = false
@@ -280,6 +291,7 @@ private final class UT99GameSurfaceInputView: UIView {
         guard inputMode != mode else { return }
         releasePointer()
         inputMode = mode
+        menuPointerNeedsAnchor = true
         accessibilityIdentifier = mode == .originalMenu
             ? "ut99.gameSurfacePointer"
             : "ut99.touch.lookArea"
@@ -771,6 +783,10 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         }
         gameSurfaceInputView.onPrimaryAction = { [weak self] pressed in
             self?.engineBridge.publishTouchAction(.primaryFire, pressed: pressed)
+        }
+        gameSurfaceInputView.onMenuClick = { [weak self] location in
+            guard let self else { return }
+            self.engineBridge.publishExternalMenuClick(location: self.rendererPoint(fromHostPoint: location))
         }
         gameSurfaceInputView.isPointerCaptured = { [weak self] in
             self?.pointerCaptureRoutingActive == true
@@ -5555,6 +5571,8 @@ extension GameViewController: UITextFieldDelegate {
         let previous = lastViewportGameplayCapture
         lastViewportGameplayCapture = captured
         guard let previous, previous != captured else { return }
+        // Gameplay moved UWindow's cursor out from under the host's record.
+        gameSurfaceInputView.menuPointerNeedsAnchor = true
         let automatic = touchOverlay.touchConfiguration.autoMenuSwitch
         NSLog("UT99 engine viewport capture changed captured=%@ autoSwitch=%@ mode=%@",
               captured ? "true" : "false", automatic ? "true" : "false",

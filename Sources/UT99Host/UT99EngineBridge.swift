@@ -861,6 +861,27 @@ final class UT99EngineBridge {
         }
     }
 
+    /// Click a UWindow point for a finger tap: move there, press, and release
+    /// a few frames later. UWindow polls input once per frame; a press and
+    /// release delivered together can collapse into no click at all.
+    func publishExternalMenuClick(location: CGPoint) {
+        menuCursorQueue.async { [weak self] in
+            guard let self else { return }
+            let width = max(self.menuCursorCanvasSize.width, location.x)
+            let height = max(self.menuCursorCanvasSize.height, location.y)
+            let point = CGPoint(x: min(max(location.x, 0), width), y: min(max(location.y, 0), height))
+            self.menuCursorPosition = point
+            self.publishGameSurfacePointer(location: point, pressed: nil, anchor: false)
+            self.publishGameSurfacePointer(location: point, pressed: true, anchor: false)
+            self.menuCursorQueue.asyncAfter(deadline: .now() + .milliseconds(Self.menuClickReleaseMilliseconds)) {
+                [weak self] in
+                self?.publishGameSurfacePointer(location: point, pressed: false, anchor: false)
+            }
+        }
+    }
+
+    static let menuClickReleaseMilliseconds = 60
+
     /// Right-click a UWindow point: move the stock cursor there, then press
     /// and release the right button. The server browser keeps refresh and
     /// ping in this context menu.
@@ -873,7 +894,7 @@ final class UT99EngineBridge {
                 x: min(max(location.x, 0), width),
                 y: min(max(location.y, 0), height)
             )
-            self.publishGameSurfacePointer(location: self.menuCursorPosition, pressed: nil, anchor: true)
+            self.publishGameSurfacePointer(location: self.menuCursorPosition, pressed: nil, anchor: false)
             let (_, windowID) = self.focusedSDLWindow()
             let x = Int32(self.menuCursorPosition.x.rounded())
             let y = Int32(self.menuCursorPosition.y.rounded())
