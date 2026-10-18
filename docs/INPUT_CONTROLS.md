@@ -5,14 +5,24 @@ physical acceptance. See [`CURRENT_INPUT_STATUS.md`](CURRENT_INPUT_STATUS.md)
 for the evidence-backed working, rejected, and open behavior of the current
 iPad build.
 
-UTP exposes two explicit input modes. The three-dot host menu
-shows the current mode and switches between **Menu Controls** and **Gameplay
-Controls**. In Menu mode, MOVE controls the stock cursor and SELECT chooses;
-in Gameplay mode, MOVE walks and the right-side surface or right stick looks.
-The selected mode applies to touch, controller, and pointer routing. A trackpad
-and a mouse are the same pointer input class. Input
-mode and touch-overlay visibility are independent: changing modes never turns
-touch controls on, sends Escape, or changes game state.
+UTP has two input modes, Menu and Gameplay. By default UTP follows the
+engine's own viewport capture flag: when UT captures the mouse for play it
+switches to Gameplay, and when a UWindow menu releases it, to Menu. Only the
+flag's changes switch modes, so a manual choice stands until UT itself moves
+between menu and play; **Menu controls in UT menus** turns this off. The
+options tray (hold MENU) has a MENU/PLAY override. In Menu mode, UT menus are
+tapped directly: a tap clicks, a drag holds the left button (scrollbars), and
+a long press right-clicks (server browser refresh and ping). In Gameplay mode
+the left stick walks and the right-side surface or right stick looks. The
+selected mode applies to touch, controller, and pointer routing. A trackpad
+and a mouse are the same pointer input class. Input mode and touch-overlay
+visibility are independent: changing modes never turns touch controls on,
+sends Escape, or changes game state.
+
+While touch controls show, the MENU button replaces the three-dot host button:
+tap it for UT's menu (Escape), hold it for the options tray (profile, keyboard,
+console, recent servers, MENU/PLAY, layout, settings, and MORE for the full
+host panel). The three-dot button returns whenever touch controls are hidden.
 
 The optional **Capture Mouse / Trackpad** action requests native iPadOS pointer
 lock. When iPadOS grants it, the system pointer is hidden and UTP consumes one
@@ -50,10 +60,11 @@ with no detected controller restores touch controls as the safe input baseline.
 | Controller View / Select | Switch to Gameplay Controls | Switch to Menu Controls |
 | Controller Menu | Escape; close or go back | Escape; open menu |
 
-Menu touch UI must always show the cursor stick, SELECT, and BACK. It must never
-draw a second host cursor or route menu input through gameplay movement/fire.
-SELECT and BACK have separate saved menu-layout positions, so arranging menu
-controls does not move FIRE or GAME MENU in gameplay mode. Physical pointer
+Menu touch UI shows only MENU (BACK) and a keyboard chip; menu items are
+tapped directly at their own position. It must never draw a second host
+cursor or route menu input through gameplay movement/fire. BACK keeps a
+separate saved menu-layout position, so arranging menu controls does not move
+GAME MENU in gameplay mode. Physical pointer
 motion and the touch/controller trackball update the same stock cursor
 position. Touch-only users can focus a stock text field and choose **Open
 Keyboard** from the host menu to reveal UTP's in-host keyboard. Its letters,
@@ -64,8 +75,8 @@ iPhone uses the compact layout by default, and **Small/Large** changes the panel
 size on either device class. Hardware and host software keyboard entry in the
 real Player Name field are physically accepted on the 2026-08-27 iPad build.
 
-Controller routing follows the explicit Menu/Gameplay mode instead of guessing
-from engine mouse-capture state. In Menu mode the left stick moves the stock
+Controller routing follows the current Menu/Gameplay mode, whether it was set
+automatically or by hand. In Menu mode the left stick moves the stock
 cursor, A selects, and B goes back. In Gameplay mode the left stick moves, the
 right stick looks, A jumps, B crouches, and the right/left triggers fire and
 alt-fire. The Xbox View/Select button switches directly between the two modes;

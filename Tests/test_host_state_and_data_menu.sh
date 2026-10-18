@@ -115,7 +115,7 @@ rg -Fq 'menuButton.onAccessibilityActivate' Sources/UT99Host/GameViewController.
 rg -Fq 'menuButton.showsMenuAsPrimaryAction = false' Sources/UT99Host/GameViewController.swift
 rg -Fq 'private var hostMenuPanel: UIVisualEffectView?' Sources/UT99Host/GameViewController.swift
 rg -Fq '"SWITCH TO GAMEPLAY: MOVE & LOOK"' Sources/UT99Host/GameViewController.swift
-rg -Fq '"SWITCH TO MENU: CURSOR & SELECT"' Sources/UT99Host/GameViewController.swift
+rg -Fq '"SWITCH TO MENU: TAP & LONG-PRESS"' Sources/UT99Host/GameViewController.swift
 rg -Fq 'originalMenuInputActive ? "ESCAPE / BACK" : "OPEN UT MENU"' Sources/UT99Host/GameViewController.swift
 rg -Fq 'keyboardIsOpen ? "CLOSE KEYBOARD" : "OPEN KEYBOARD"' Sources/UT99Host/GameViewController.swift
 rg -Fq 'hostPanelButton("TRY NORMAL START"' Sources/UT99Host/GameViewController.swift
@@ -170,7 +170,7 @@ rg -Fq 'button.isHidden = active' Sources/UT99Host/GoldenPadTouchOverlay.swift
 rg -Fq 'guard !CommandLine.arguments.contains("-UT99AutoStart") else { return }' Sources/UT99Host/GameViewController.swift
 rg -Fq 'CommandLine.arguments.contains("-UT99TouchSettingsPanelSmokeTest"),' Sources/UT99Host/GameViewController.swift
 rg -Fq 'touchOverlay.isHidden = true' Sources/UT99Host/GameViewController.swift
-if rg -q 'Layout Preset|touchPresetChanged|showTouchProfiles|Choose a control size preset|UISegmentedControl\(items:' Sources/UT99Host/GameViewController.swift; then
+if rg -q 'Layout Preset|touchPresetChanged|showTouchProfiles|Choose a control size preset' Sources/UT99Host/GameViewController.swift; then
     echo "Internal touch-layout terminology leaked into the player settings UI" >&2
     exit 1
 fi
@@ -268,14 +268,16 @@ rg -Fq 'private func toggleTouchInterfaceMode()' Sources/UT99Host/GameViewContro
 rg -Fq 'private func selectTouchInterfaceMode(menu: Bool)' Sources/UT99Host/GameViewController.swift
 rg -Fq 'Visibility is an independent user choice' Sources/UT99Host/GameViewController.swift
 rg -Fq '"Switch to Gameplay Controls" : "Switch to Menu Controls"' Sources/UT99Host/GameViewController.swift
-rg -Fq '"MENU MODE\nMOVE controls the cursor. SELECT chooses. Switch after entering a match."' Sources/UT99Host/GameViewController.swift
+rg -Fq '"MENU MODE\nTap menu items directly. Long-press to right-click."' Sources/UT99Host/GameViewController.swift
 rg -Fq '"GAMEPLAY MODE\nWASD or MOVE walks. Mouse, trackpad, or the right side looks."' Sources/UT99Host/GameViewController.swift
 rg -Fq '"SWITCH TO GAMEPLAY: MOVE & LOOK"' Sources/UT99Host/GameViewController.swift
-rg -Fq '"SWITCH TO MENU: CURSOR & SELECT"' Sources/UT99Host/GameViewController.swift
-if rg -Fq 'synchronizeInputModeFromViewport' Sources/UT99Host; then
-    echo "Touch interface mode must be changed explicitly from the host menu" >&2
-    exit 1
-fi
+rg -Fq '"SWITCH TO MENU: TAP & LONG-PRESS"' Sources/UT99Host/GameViewController.swift
+# Menu/Gameplay follows the engine viewport's capture flag, but only on its
+# edges, behind a setting, so a manual MENU/PLAY choice is never overridden
+# until UT itself moves between menu and play.
+rg -Fq 'private func followEngineMenuState()' Sources/UT99Host/GameViewController.swift
+rg -Fq 'guard let previous, previous != captured else { return }' Sources/UT99Host/GameViewController.swift
+rg -Fq 'let automatic = touchOverlay.touchConfiguration.autoMenuSwitch' Sources/UT99Host/GameViewController.swift
 rg -Fq 'controller.handlerQueue = controllerMonitorQueue' Sources/UT99Host/GameViewController.swift
 rg -Fq 'private var controllerAutoHideActive = false' Sources/UT99Host/GameViewController.swift
 rg -Fq 'controllerAutoHideActive = false' Sources/UT99Host/GameViewController.swift
@@ -290,9 +292,10 @@ if rg -Fq 'SDL_GetRelativeMouseMode' Sources/UT99Host; then
     echo "Menu cursor routing must not depend on SDL's global relative-mouse mode" >&2
     exit 1
 fi
-rg -Fq 'buttons[.primaryFire]?.setTitle(active ? "SELECT" : "FIRE")' Sources/UT99Host/GoldenPadTouchOverlay.swift
+rg -Fq 'buttons[.primaryFire]?.setTitle(menuInteractionActive ? "SELECT" : title(for: .primaryFire))' Sources/UT99Host/GoldenPadTouchOverlay.swift
 rg -Fq 'buttons[.pause]?.setTitle(active ? "BACK" : "GAME MENU")' Sources/UT99Host/GoldenPadTouchOverlay.swift
-rg -Fq '? action != .primaryFire && action != .pause' Sources/UT99Host/GoldenPadTouchOverlay.swift
+# UT menus are tapped directly: only MENU (BACK) stays on screen.
+rg -Fq '? action != .pause' Sources/UT99Host/GoldenPadTouchOverlay.swift
 rg -Fq 'return "menuSelect"' Sources/UT99Host/GoldenPadTouchOverlay.swift
 rg -Fq 'return "menuBack"' Sources/UT99Host/GoldenPadTouchOverlay.swift
 rg -Fq '.union(["move", "menuSelect", "menuBack"])' Sources/UT99Host/UT99TouchProfileStore.swift
@@ -453,7 +456,7 @@ rg -Fq 'SDL_PrivateSendMouseMotion(window, 0, SDL_FALSE, x, y)' third_party/patc
 rg -Fq 'try? Data().write(to: stdoutURL, options: .atomic)' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'appendingPathComponent("UT99FontSupport", isDirectory: true)' Sources/UT99Host/GameViewController.swift
 rg -Fq 'UT99FontSupport' UT99Apple.xcodeproj/project.pbxproj
-rg -Fq 'desired.insert((1 << 30) | 82)' Sources/UT99Host/UT99EngineBridge.swift
+rg -Fq 'case .forward: (1 << 30) | 82 // Up: MoveForward' Sources/UT99Host/UT99EngineBridge.swift
 if rg -Fq 'UIKeyboardHIDUsage.keyboardW.rawValue: return (1 << 30) | 82' Sources/UT99Host/UT99EngineBridge.swift; then
     echo "Hardware W must remain W so the preserved User.ini decides its binding" >&2
     exit 1

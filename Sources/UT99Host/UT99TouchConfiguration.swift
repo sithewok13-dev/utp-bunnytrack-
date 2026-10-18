@@ -41,6 +41,12 @@ struct UT99TouchConfiguration: Codable, Equatable {
     var customCommand: String
     /// In gameplay ALT dodges left and FIRE dodges right instead of shooting.
     var fireButtonsDodge: Bool
+    /// CUSTOM fires only after a short hold, so a stray touch cannot run it.
+    var customHoldToConfirm: Bool
+    /// Switch to the Bunny Track profile on BT maps and back elsewhere.
+    var autoProfileByMap: Bool
+    /// Follow UT's own menu/gameplay state instead of a manual switch.
+    var autoMenuSwitch: Bool
 
     init(
         leftHanded: Bool,
@@ -57,7 +63,10 @@ struct UT99TouchConfiguration: Codable, Equatable {
         flickDodgeDistance: Double = 40,
         flickDodgeMilliseconds: Int = 150,
         customCommand: String = UT99TouchConfiguration.defaultCustomCommand,
-        fireButtonsDodge: Bool = false
+        fireButtonsDodge: Bool = false,
+        customHoldToConfirm: Bool = true,
+        autoProfileByMap: Bool = true,
+        autoMenuSwitch: Bool = true
     ) {
         self.leftHanded = leftHanded
         self.hiddenActions = hiddenActions
@@ -74,6 +83,9 @@ struct UT99TouchConfiguration: Codable, Equatable {
         self.flickDodgeMilliseconds = flickDodgeMilliseconds
         self.customCommand = customCommand
         self.fireButtonsDodge = fireButtonsDodge
+        self.customHoldToConfirm = customHoldToConfirm
+        self.autoProfileByMap = autoProfileByMap
+        self.autoMenuSwitch = autoMenuSwitch
     }
 
     static let standard = UT99TouchConfiguration(
@@ -104,7 +116,10 @@ struct UT99TouchConfiguration: Codable, Equatable {
             flickDodgeDistance: min(max(flickDodgeDistance, 20), 90),
             flickDodgeMilliseconds: min(max(flickDodgeMilliseconds, 60), 300),
             customCommand: UT99TouchKeyBindings.sanitizedCommand(customCommand),
-            fireButtonsDodge: fireButtonsDodge
+            fireButtonsDodge: fireButtonsDodge,
+            customHoldToConfirm: customHoldToConfirm,
+            autoProfileByMap: autoProfileByMap,
+            autoMenuSwitch: autoMenuSwitch
         )
     }
 
@@ -155,6 +170,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
         case leftHanded, hiddenActions, lookAcceleration, lookDeadZone, movementDeadZone, autoHideForController
         case dodgeSwipeDistance, dodgeSideOnly, dodgeHaptics, dodgeStepMilliseconds
         case flickDodgeEnabled, flickDodgeDistance, flickDodgeMilliseconds, customCommand, fireButtonsDodge
+        case customHoldToConfirm, autoProfileByMap, autoMenuSwitch
     }
 
     init(from decoder: Decoder) throws {
@@ -184,6 +200,12 @@ struct UT99TouchConfiguration: Codable, Equatable {
             ?? standard.customCommand
         fireButtonsDodge = try container.decodeIfPresent(Bool.self, forKey: .fireButtonsDodge)
             ?? standard.fireButtonsDodge
+        customHoldToConfirm = try container.decodeIfPresent(Bool.self, forKey: .customHoldToConfirm)
+            ?? standard.customHoldToConfirm
+        autoProfileByMap = try container.decodeIfPresent(Bool.self, forKey: .autoProfileByMap)
+            ?? standard.autoProfileByMap
+        autoMenuSwitch = try container.decodeIfPresent(Bool.self, forKey: .autoMenuSwitch)
+            ?? standard.autoMenuSwitch
     }
 
     func encode(to encoder: Encoder) throws {
@@ -203,6 +225,9 @@ struct UT99TouchConfiguration: Codable, Equatable {
         try container.encode(flickDodgeMilliseconds, forKey: .flickDodgeMilliseconds)
         try container.encode(customCommand, forKey: .customCommand)
         try container.encode(fireButtonsDodge, forKey: .fireButtonsDodge)
+        try container.encode(customHoldToConfirm, forKey: .customHoldToConfirm)
+        try container.encode(autoProfileByMap, forKey: .autoProfileByMap)
+        try container.encode(autoMenuSwitch, forKey: .autoMenuSwitch)
     }
 
     /// The Bunny Track preset: hide combat clutter, slow the look curve for
@@ -444,5 +469,89 @@ enum UT99TouchInputTuning {
             x: value.x * CGFloat(gain),
             y: value.y * CGFloat(gain) * yDirection
         )
+    }
+}
+
+/// Built-in touch profiles. Each keeps its own layout and settings in the
+/// named-profile store once it has been used.
+enum UT99TouchProfileName {
+    static let standard = "Standard"
+    static let bunnyTrack = "Bunny Track"
+
+    /// Bunny Track maps are conventionally CTF-BT-*; a few use a bare BT-*.
+    static func isBunnyTrackMap(_ map: String) -> Bool {
+        let upper = map.uppercased()
+        return upper.hasPrefix("CTF-BT") || upper.hasPrefix("BT-")
+    }
+
+    static func forMap(_ map: String) -> String {
+        isBunnyTrackMap(map) ? bunnyTrack : standard
+    }
+}
+
+/// What the host learns from UT's own log: the map being loaded and the
+/// server being joined. The engine is unmodified, so its log is the only
+/// window onto this state.
+enum UT99EngineLogEvent: Equatable {
+    case map(String)
+    case server(String)
+}
+
+enum UT99EngineLogWatch {
+    /// Title-screen and transition maps that say nothing about the game mode.
+    static let neutralMaps: Set<String> = ["entry", "ut-logo-map", "index", "cityintro", "autoplay"]
+
+    static func event(in line: String) -> UT99EngineLogEvent? {
+        // The host's own NSLog lines share the redirected stderr file.
+        guard !line.contains("UT99") else { return nil }
+        guard let marker = ["LoadMap:", "Browse:"].lazy.compactMap({ line.range(of: $0) }).first else { return nil }
+        var rest = line[marker.upperBound...].drop(while: { $0 == " " || $0 == "\t" })
+        if rest.lowercased().hasPrefix("unreal://") { rest = rest.dropFirst("unreal://".count) }
+        let token = String(rest.prefix(while: { !$0.isWhitespace && $0 != "?" && $0 != "/" && $0 != "#" }))
+        guard !token.isEmpty else { return nil }
+        if isServerAddress(token) { return .server(token) }
+        var map = token
+        if map.lowercased().hasSuffix(".unr") { map = String(map.dropLast(4)) }
+        guard !map.isEmpty, !neutralMaps.contains(map.lowercased()),
+              map.allSatisfy({ $0.isLetter || $0.isNumber || "-_[]().".contains($0) }) else { return nil }
+        return .map(map)
+    }
+
+    /// IPv4 with a port, e.g. 203.0.113.7:7777.
+    static func isServerAddress(_ token: String) -> Bool {
+        let parts = token.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, let port = Int(parts[1]), (1...65535).contains(port) else { return false }
+        let octets = parts[0].split(separator: ".", omittingEmptySubsequences: false)
+        return octets.count == 4 && octets.allSatisfy { octet in
+            guard let value = Int(octet), octet.count <= 3 else { return false }
+            return (0...255).contains(value)
+        }
+    }
+}
+
+/// The last few servers joined, newest first, for one-tap reconnecting.
+struct UT99RecentServer: Codable, Equatable {
+    var address: String
+    var map: String?
+
+    static let defaultsKey = "ut99.recentServers.v1"
+    static let maximumCount = 6
+
+    static func recording(_ address: String, map: String?, in list: [UT99RecentServer]) -> [UT99RecentServer] {
+        let previous = list.first { $0.address == address }
+        var result = list.filter { $0.address != address }
+        result.insert(UT99RecentServer(address: address, map: map ?? previous?.map), at: 0)
+        return Array(result.prefix(maximumCount))
+    }
+
+    static func load(from defaults: UserDefaults = .standard) -> [UT99RecentServer] {
+        guard let data = defaults.data(forKey: defaultsKey),
+              let list = try? JSONDecoder().decode([UT99RecentServer].self, from: data) else { return [] }
+        return Array(list.filter { UT99EngineLogWatch.isServerAddress($0.address) }.prefix(maximumCount))
+    }
+
+    static func save(_ list: [UT99RecentServer], to defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(Array(list.prefix(maximumCount))) else { return }
+        defaults.set(data, forKey: defaultsKey)
     }
 }

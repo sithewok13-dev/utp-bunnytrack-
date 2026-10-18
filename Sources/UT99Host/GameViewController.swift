@@ -43,7 +43,25 @@ private final class UT99GameSurfaceInputView: UIView {
     var isPointerCaptured: (() -> Bool)?
     /// Gameplay fingers publish normalized relative deltas. They never click.
     var onLook: ((CGPoint, Bool) -> Void)?
+    /// A long press on a UT menu: right-click there (server list refresh,
+    /// ping and the other UWindow context menus).
+    var onSecondaryClick: ((CGPoint) -> Void)?
+    /// Fingers drive UT's menus only while the host is in Menu mode. The
+    /// surface also enters pointer mode when touch controls are hidden during
+    /// gameplay, where a finger must never become a mouse click.
+    var fingerMenuEnabled = false
     private weak var trackedTouch: UITouch?
+    /// The finger currently driving UT's menus directly: tap clicks, drag
+    /// holds the left button (scrollbars, sliders), long press right-clicks.
+    private weak var menuTouch: UITouch?
+    private var menuTouchStart = CGPoint.zero
+    private var menuTouchStartTime: CFTimeInterval = 0
+    private var menuTouchDragging = false
+    private var menuTouchLongPressed = false
+    private var menuLongPressLink: CADisplayLink?
+    private let menuHaptic = UIImpactFeedbackGenerator(style: .medium)
+    static let menuLongPressSeconds: CFTimeInterval = 0.5
+    static let menuDragThreshold: CGFloat = 12
     private var lastLookLocation: CGPoint?
     private var lastHoverLocation: CGPoint?
     private(set) var inputMode: InputMode = .originalMenu
@@ -73,10 +91,10 @@ private final class UT99GameSurfaceInputView: UIView {
         guard trackedTouch == nil,
               let touch = touches.first(where: { $0.type != .indirectPointer }) else { return }
         let location = touch.location(in: self)
-        // Direct menu touch is owned by the visible cursor stick and SELECT
-        // button. Keep this surface for gameplay look and real pointer hover;
-        // a finger must never create a second, competing absolute cursor.
-        guard inputMode != .originalMenu else { return }
+        if inputMode == .originalMenu {
+            if fingerMenuEnabled { beginMenuTouch(touch, at: location) }
+            return
+        }
         if inputMode == .gameplayLook && location.x < bounds.midX { return }
         trackedTouch = touch
         lastLookLocation = location
@@ -138,7 +156,73 @@ private final class UT99GameSurfaceInputView: UIView {
         }
     }
 
+    private func beginMenuTouch(_ touch: UITouch, at location: CGPoint) {
+        guard menuTouch == nil else { return }
+        menuTouch = touch
+        menuTouchStart = location
+        menuTouchStartTime = CACurrentMediaTime()
+        menuTouchDragging = false
+        menuTouchLongPressed = false
+        // Put UWindow's cursor under the finger first so the item highlights
+        // before any click, as a mouse hover would.
+        onPointer?(location, nil, true)
+        menuHaptic.prepare()
+        let link = CADisplayLink(target: self, selector: #selector(menuLongPressTick))
+        link.add(to: .main, forMode: .common)
+        menuLongPressLink = link
+    }
+
+    @objc private func menuLongPressTick() {
+        guard menuTouch != nil, !menuTouchDragging, !menuTouchLongPressed else {
+            stopMenuLongPressTimer()
+            return
+        }
+        guard CACurrentMediaTime() - menuTouchStartTime >= Self.menuLongPressSeconds else { return }
+        menuTouchLongPressed = true
+        stopMenuLongPressTimer()
+        menuHaptic.impactOccurred()
+        onSecondaryClick?(menuTouchStart)
+    }
+
+    private func stopMenuLongPressTimer() {
+        menuLongPressLink?.invalidate()
+        menuLongPressLink = nil
+    }
+
+    private func moveMenuTouch(_ touch: UITouch) {
+        guard !menuTouchLongPressed else { return }
+        let location = touch.location(in: self)
+        if !menuTouchDragging {
+            guard hypot(location.x - menuTouchStart.x, location.y - menuTouchStart.y) >= Self.menuDragThreshold else { return }
+            // A drag grabs whatever is under the starting point, like a mouse
+            // press-and-drag on a scrollbar.
+            menuTouchDragging = true
+            stopMenuLongPressTimer()
+            onPointer?(menuTouchStart, true, false)
+        }
+        onPointer?(location, nil, true)
+    }
+
+    private func endMenuTouch(_ touch: UITouch, cancelled: Bool) {
+        let location = touch.location(in: self)
+        stopMenuLongPressTimer()
+        if menuTouchDragging {
+            onPointer?(location, false, false)
+        } else if !menuTouchLongPressed && !cancelled {
+            onPointer?(location, nil, true)
+            onPointer?(location, true, false)
+            onPointer?(location, false, false)
+        }
+        menuTouch = nil
+        menuTouchDragging = false
+        menuTouchLongPressed = false
+    }
+
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let menuTouch, touches.contains(menuTouch) {
+            moveMenuTouch(menuTouch)
+            return
+        }
         guard let trackedTouch, touches.contains(trackedTouch) else { return }
         let location = trackedTouch.location(in: self)
         if let previous = lastLookLocation {
@@ -160,10 +244,12 @@ private final class UT99GameSurfaceInputView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let menuTouch, touches.contains(menuTouch) { endMenuTouch(menuTouch, cancelled: false) }
         finishTrackedTouch(in: touches, cancelled: false)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let menuTouch, touches.contains(menuTouch) { endMenuTouch(menuTouch, cancelled: true) }
         finishTrackedTouch(in: touches, cancelled: true)
     }
 
@@ -176,6 +262,13 @@ private final class UT99GameSurfaceInputView: UIView {
     }
 
     func releasePointer() {
+        stopMenuLongPressTimer()
+        if menuTouch != nil {
+            if menuTouchDragging { onPointer?(menuTouchStart, false, false) }
+            menuTouch = nil
+            menuTouchDragging = false
+            menuTouchLongPressed = false
+        }
         guard trackedTouch != nil else { return }
         onLook?(.zero, false)
         self.trackedTouch = nil
@@ -260,6 +353,20 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     private var controllerSampleLastLogAt: [String: TimeInterval] = [:]
     private var controllerSampleWasActive: [String: Bool] = [:]
     private var menuKeyboardPanel: UIVisualEffectView?
+    // Touch-first host chrome (see the extension at the end of this file).
+    fileprivate let menuKeyboardChip = UIButton(type: .system)
+    fileprivate var optionsTray: UIView?
+    fileprivate var optionsTrayDim: UIView?
+    fileprivate var consoleBar: UIView?
+    fileprivate weak var consoleField: UITextField?
+    fileprivate var consoleHistoryIndex: Int?
+    fileprivate var hostToast: UIView?
+    fileprivate var hostStateWatchLink: CADisplayLink?
+    fileprivate var lastHostWatchTick: CFTimeInterval = 0
+    fileprivate var lastEngineLogScan: CFTimeInterval = 0
+    fileprivate var lastViewportGameplayCapture: Bool?
+    fileprivate var engineLogOffsets: [String: UInt64] = [:]
+    fileprivate var lastJoinedServer: (address: String, at: CFTimeInterval)?
     private var menuKeyboardLetterButtons: [UIButton] = []
     private var menuKeyboardShifted = false
     private var menuKeyboardCompactOverride: Bool?
@@ -729,6 +836,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             self?.engineBridge.publishTouchLook(value, active: active)
         }
         configureAppleIntegrations()
+        configureTouchFirstChrome()
 
         let eyebrow = UILabel()
         eyebrow.text = "OLDUNREAL  ·  v469e"
@@ -1708,6 +1816,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         // on another UWindow menu without any pointer surface.
         let pointerFallbackActive = originalMenuInputActive || !touchEnabled || controllerAutoHideActive
         gameSurfaceInputView.setInputMode(pointerFallbackActive ? .originalMenu : .gameplayLook)
+        gameSurfaceInputView.fingerMenuEnabled = originalMenuInputActive
         // This transparent surface is also the hardware mouse/trackpad bridge
         // in gameplay, so it must remain active even when touch controls show.
         gameSurfaceInputView.isUserInteractionEnabled = engineActive
@@ -2766,13 +2875,13 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         if engineActive {
             stack.addArrangedSubview(hostPanelMessage(
                 originalMenuInputActive
-                    ? "MENU MODE\nMOVE controls the cursor. SELECT chooses. Switch after entering a match."
+                    ? "MENU MODE\nTap menu items directly. Long-press to right-click."
                     : "GAMEPLAY MODE\nWASD or MOVE walks. Mouse, trackpad, or the right side looks."
             ))
             stack.addArrangedSubview(hostPanelButton(
                 originalMenuInputActive
                     ? "SWITCH TO GAMEPLAY: MOVE & LOOK"
-                    : "SWITCH TO MENU: CURSOR & SELECT",
+                    : "SWITCH TO MENU: TAP & LONG-PRESS",
                 symbol: originalMenuInputActive ? "gamecontroller.fill" : "cursorarrow.motionlines"
             ) { [weak self] in
                 self?.toggleTouchInterfaceMode()
@@ -3369,6 +3478,21 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         fireButtonsDodge.accessibilityLabel = "ALT dodges left and FIRE dodges right"
         fireButtonsDodge.addTarget(self, action: #selector(touchFireButtonsDodgeChanged(_:)), for: .valueChanged)
 
+        let customHold = UISwitch()
+        customHold.isOn = dodgeConfiguration.customHoldToConfirm
+        customHold.accessibilityLabel = "Hold CUSTOM to confirm"
+        customHold.addTarget(self, action: #selector(touchCustomHoldChanged(_:)), for: .valueChanged)
+
+        let autoMenu = UISwitch()
+        autoMenu.isOn = dodgeConfiguration.autoMenuSwitch
+        autoMenu.accessibilityLabel = "Switch controls automatically for UT menus"
+        autoMenu.addTarget(self, action: #selector(touchAutoMenuChanged(_:)), for: .valueChanged)
+
+        let autoProfile = UISwitch()
+        autoProfile.isOn = dodgeConfiguration.autoProfileByMap
+        autoProfile.accessibilityLabel = "Use the Bunny Track profile on BT maps"
+        autoProfile.addTarget(self, action: #selector(touchAutoProfileChanged(_:)), for: .valueChanged)
+
         let customVisible = UISwitch()
         customVisible.isOn = touchOverlay.isActionVisible(.customCommand)
         customVisible.accessibilityLabel = "Show CUSTOM button"
@@ -3398,6 +3522,10 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsRow(title: "WALK button", control: walkVisible),
             touchSettingsRow(title: "CUSTOM button", control: customVisible),
             customCommand,
+            touchSettingsRow(title: "Hold CUSTOM to confirm", control: customHold),
+            touchSettingsSection("AUTOMATIC"),
+            touchSettingsRow(title: "Menu controls in UT menus", control: autoMenu),
+            touchSettingsRow(title: "BT profile on BT maps", control: autoProfile),
             touchSettingsSection("DODGE"),
             touchSettingsRow(title: "Flick look side to dodge", control: flickDodge),
             touchSettingsRow(title: "Flick sensitivity", control: flickSensitivity),
@@ -3597,6 +3725,24 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         if sender.isOn { touchOverlay.setAction(.alternateFire, visible: true) }
     }
 
+    @objc private func touchCustomHoldChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.customHoldToConfirm = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchAutoMenuChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.autoMenuSwitch = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchAutoProfileChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.autoProfileByMap = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
     @objc private func touchWalkVisibleChanged(_ sender: UISwitch) {
         touchOverlay.setAction(.walk, visible: sender.isOn)
     }
@@ -3606,7 +3752,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     @objc private func applyBunnyTrackLayoutFromSettings() {
-        touchOverlay.applyBunnyTrackLayout()
+        applyBunnyTrackProfilePreset()
         statusLabel.text = "Bunny Track layout applied"
         refreshHostMenu()
         // Rebuild the panel so every switch reflects the preset.
@@ -5313,4 +5459,501 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+}
+
+// MARK: - Touch-first host chrome
+//
+// MENU (tap: UT's menu, hold: options tray) replaces the three-dot panel while
+// touch controls are showing. The panel remains behind MORE, and the three-dot
+// button returns whenever touch controls are hidden, so there is always a way
+// back in.
+extension GameViewController: UITextFieldDelegate {
+    private static let activeTouchProfileKey = "ut99.touch.activeProfile"
+    private static let consoleHistoryKey = "ut99.console.history.v1"
+    private static let menuHoldHintShownKey = "ut99.touch.menuHoldHintShown.v1"
+    private static let consoleHistoryLimit = 20
+
+    private var isEngineActive: Bool {
+        hostState == .startingEngine || hostState == .running || hostState == .pausedBySystem
+    }
+
+    func configureTouchFirstChrome() {
+        touchOverlay.onMenuHold = { [weak self] in
+            self?.showOptionsTray()
+        }
+        gameSurfaceInputView.onSecondaryClick = { [weak self] location in
+            guard let self else { return }
+            self.engineBridge.publishExternalMenuSecondaryClick(location: self.rendererPoint(fromHostPoint: location))
+        }
+
+        var keyboard = UIButton.Configuration.filled()
+        keyboard.image = UIImage(systemName: "keyboard")
+        keyboard.baseBackgroundColor = UIColor(white: 0.06, alpha: 0.78)
+        keyboard.baseForegroundColor = .white
+        keyboard.cornerStyle = .capsule
+        menuKeyboardChip.configuration = keyboard
+        menuKeyboardChip.accessibilityLabel = "Keyboard"
+        menuKeyboardChip.accessibilityHint = "Types into the selected Unreal Tournament field."
+        menuKeyboardChip.translatesAutoresizingMaskIntoConstraints = false
+        menuKeyboardChip.isHidden = true
+        menuKeyboardChip.addAction(UIAction { [weak self] _ in self?.toggleMenuTextKeyboard() }, for: .touchUpInside)
+        view.addSubview(menuKeyboardChip)
+        NSLayoutConstraint.activate([
+            menuKeyboardChip.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            menuKeyboardChip.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            menuKeyboardChip.widthAnchor.constraint(equalToConstant: 52),
+            menuKeyboardChip.heightAnchor.constraint(equalToConstant: 44),
+        ])
+
+        // The original engine owns the main loop and does not drain main-queue
+        // blocks, but display links fire. One slow link drives all polling.
+        let link = CADisplayLink(target: self, selector: #selector(hostStateWatchTick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 4, maximum: 10, preferred: 8)
+        link.add(to: .main, forMode: .common)
+        hostStateWatchLink = link
+    }
+
+    @objc private func hostStateWatchTick() {
+        let now = CACurrentMediaTime()
+        guard now - lastHostWatchTick >= 0.25 else { return }
+        lastHostWatchTick = now
+        updateTouchFirstChrome()
+        if hostState == .running {
+            followEngineMenuState()
+        } else {
+            lastViewportGameplayCapture = nil
+        }
+        if now - lastEngineLogScan >= 1 {
+            lastEngineLogScan = now
+            scanEngineLogs()
+        }
+    }
+
+    /// Show the three-dot button only when MENU is not on screen, and the
+    /// keyboard chip only in UT's menus.
+    private func updateTouchFirstChrome() {
+        let touchMenuVisible = isEngineActive && !touchOverlay.isHidden
+        menuButton.isHidden = touchMenuVisible && hostMenuPanel == nil
+        menuKeyboardChip.isHidden = !(isEngineActive && originalMenuInputActive && menuKeyboardPanel == nil &&
+            consoleBar == nil && optionsTray == nil && hostMenuPanel == nil)
+        if !menuKeyboardChip.isHidden { view.bringSubviewToFront(menuKeyboardChip) }
+        if touchMenuVisible && !originalMenuInputActive &&
+            !UserDefaults.standard.bool(forKey: Self.menuHoldHintShownKey) {
+            UserDefaults.standard.set(true, forKey: Self.menuHoldHintShownKey)
+            showHostToast("Tap MENU for UT's menu · hold MENU for options")
+        }
+    }
+
+    // MARK: Automatic menu / gameplay
+
+    /// Follow the engine's own viewport capture flag (see
+    /// `isGameplayMouseCaptureEnabled`): captured is gameplay, released is a
+    /// UWindow menu. Only changes switch modes, so a manual MENU/PLAY choice
+    /// from the tray stands until UT itself moves between menu and play.
+    private func followEngineMenuState() {
+        let captured = engineBridge.isGameplayMouseCaptureEnabled()
+        let previous = lastViewportGameplayCapture
+        lastViewportGameplayCapture = captured
+        guard let previous, previous != captured else { return }
+        let automatic = touchOverlay.touchConfiguration.autoMenuSwitch
+        NSLog("UT99 engine viewport capture changed captured=%@ autoSwitch=%@ mode=%@",
+              captured ? "true" : "false", automatic ? "true" : "false",
+              originalMenuInputActive ? "menu" : "gameplay")
+        guard automatic, !touchOverlay.editingLayout, (!captured) != originalMenuInputActive else { return }
+        setOriginalMenuInputActive(!captured)
+        refreshHostMenu()
+    }
+
+    // MARK: UT log: map and server
+
+    private func scanEngineLogs() {
+        let support = dataSupportRoot()
+        let candidates = [
+            support.appendingPathComponent("System", isDirectory: true).appendingPathComponent("UnrealTournament.log"),
+            support.appendingPathComponent("UnrealTournament.log"),
+            support.appendingPathComponent("UT99-engine.stdout"),
+        ]
+        for url in candidates {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = (attributes[.size] as? NSNumber)?.uint64Value else { continue }
+            guard let offset = engineLogOffsets[url.path] else {
+                // Skip history from earlier sessions; only new lines matter.
+                engineLogOffsets[url.path] = size
+                continue
+            }
+            if size < offset {
+                engineLogOffsets[url.path] = 0
+                continue
+            }
+            guard size > offset, let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            let readLength = Int(min(size - offset, 256 * 1024))
+            guard (try? handle.seek(toOffset: offset)) != nil,
+                  let data = try? handle.read(upToCount: readLength),
+                  let lastNewline = data.lastIndex(of: 0x0A) else { continue }
+            engineLogOffsets[url.path] = offset + UInt64(lastNewline + 1)
+            let text = String(decoding: data[data.startIndex...lastNewline], as: UTF8.self)
+            for line in text.split(separator: "\n") {
+                if let event = UT99EngineLogWatch.event(in: String(line)) { handleEngineLogEvent(event) }
+            }
+        }
+    }
+
+    private func handleEngineLogEvent(_ event: UT99EngineLogEvent) {
+        switch event {
+        case let .server(address):
+            lastJoinedServer = (address, CACurrentMediaTime())
+            UT99RecentServer.save(UT99RecentServer.recording(address, map: nil, in: UT99RecentServer.load()))
+            NSLog("UT99 engine log server joined")
+        case let .map(map):
+            // The server's map loads right after the join line.
+            if let joined = lastJoinedServer, CACurrentMediaTime() - joined.at < 30 {
+                UT99RecentServer.save(UT99RecentServer.recording(joined.address, map: map, in: UT99RecentServer.load()))
+                lastJoinedServer = nil
+            }
+            NSLog("UT99 engine log map=%@", map)
+            guard touchOverlay.touchConfiguration.autoProfileByMap else { return }
+            let target = UT99TouchProfileName.forMap(map)
+            if target != activeTouchProfileName {
+                switchTouchProfile(to: target)
+                showHostToast("\(target) controls")
+            }
+        }
+    }
+
+    // MARK: Profiles
+
+    private var activeTouchProfileName: String {
+        UserDefaults.standard.string(forKey: Self.activeTouchProfileKey) ?? UT99TouchProfileName.standard
+    }
+
+    /// Save the current controls under the active profile, then load the
+    /// target. A built-in profile used for the first time starts from its
+    /// preset: the stock layout for Standard, the BT layout for Bunny Track.
+    private func switchTouchProfile(to name: String) {
+        if let current = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+            _ = try? UT99TouchProfileStore.upsert(current)
+        }
+        if let stored = UT99TouchProfileStore.profiles().first(where: {
+            $0.name.caseInsensitiveCompare(name) == .orderedSame
+        }) {
+            try? touchOverlay.applyTouchProfileDocument(stored)
+        } else if name == UT99TouchProfileName.bunnyTrack {
+            touchOverlay.applyBunnyTrackLayout()
+        } else {
+            touchOverlay.resetTouchLayout()
+        }
+        UserDefaults.standard.set(name, forKey: Self.activeTouchProfileKey)
+        if let saved = try? touchOverlay.makeTouchProfile(named: name) {
+            _ = try? UT99TouchProfileStore.upsert(saved)
+        }
+        updateTouchVisibility()
+        NSLog("UT99 touch profile active=%@", name)
+    }
+
+    /// Standard, Bunny Track, then any other saved profiles, in order.
+    private func cycleTouchProfile() {
+        var names = [UT99TouchProfileName.standard, UT99TouchProfileName.bunnyTrack]
+        for profile in UT99TouchProfileStore.profiles() where
+            !names.contains(where: { $0.caseInsensitiveCompare(profile.name) == .orderedSame }) {
+            names.append(profile.name)
+        }
+        let index = names.firstIndex { $0.caseInsensitiveCompare(activeTouchProfileName) == .orderedSame } ?? -1
+        let next = names[(index + 1) % names.count]
+        switchTouchProfile(to: next)
+        showHostToast("\(next) controls")
+    }
+
+    /// Settings' Apply BT Layout: reset the Bunny Track profile to its preset
+    /// and make it active.
+    func applyBunnyTrackProfilePreset() {
+        if activeTouchProfileName != UT99TouchProfileName.bunnyTrack,
+           let current = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+            _ = try? UT99TouchProfileStore.upsert(current)
+        }
+        touchOverlay.applyBunnyTrackLayout()
+        UserDefaults.standard.set(UT99TouchProfileName.bunnyTrack, forKey: Self.activeTouchProfileKey)
+        if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
+            _ = try? UT99TouchProfileStore.upsert(saved)
+        }
+    }
+
+    // MARK: Options tray
+
+    private func showOptionsTray() {
+        closeOptionsTray()
+        releaseGameplayInputs()
+        let dim = UIControl()
+        dim.translatesAutoresizingMaskIntoConstraints = false
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.28)
+        dim.accessibilityLabel = "Close options"
+        dim.addAction(UIAction { [weak self] _ in self?.closeOptionsTray() }, for: .touchDown)
+
+        let panel = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.layer.cornerRadius = 18
+        panel.layer.cornerCurve = .continuous
+        panel.layer.borderWidth = 1
+        panel.layer.borderColor = UIColor.white.withAlphaComponent(0.24).cgColor
+        panel.clipsToBounds = true
+
+        let inMenu = originalMenuInputActive
+        let items: [UIButton] = [
+            trayButton("PROFILE", detail: activeTouchProfileName, symbol: "person.crop.square") { [weak self] in
+                self?.cycleTouchProfile()
+            },
+            trayButton("KEYBOARD", symbol: "keyboard") { [weak self] in self?.toggleMenuTextKeyboard() },
+            trayButton("CONSOLE", symbol: "terminal") { [weak self] in self?.showConsoleBar() },
+            trayButton("SERVERS", symbol: "clock.arrow.circlepath") { [weak self] in self?.showRecentServers() },
+            trayButton(inMenu ? "PLAY" : "MENU", detail: "controls",
+                       symbol: inMenu ? "gamecontroller.fill" : "cursorarrow.click") { [weak self] in
+                self?.selectTouchInterfaceMode(menu: !inMenu)
+            },
+            trayButton("LAYOUT", symbol: "move.3d") { [weak self] in self?.editTouchLayout() },
+            trayButton("SETTINGS", symbol: "slider.horizontal.3") { [weak self] in self?.showTouchSettings() },
+            trayButton("MORE", symbol: "ellipsis.circle") { [weak self] in self?.toggleMenu() },
+        ]
+        let row = UIStackView(arrangedSubviews: items)
+        row.axis = .horizontal
+        row.distribution = .fillEqually
+        row.spacing = 6
+        row.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView.addSubview(row)
+
+        view.addSubview(dim)
+        view.addSubview(panel)
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            dim.topAnchor.constraint(equalTo: view.topAnchor),
+            dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            panel.centerXAnchor.constraint(equalTo: safe.centerXAnchor),
+            panel.topAnchor.constraint(equalTo: safe.topAnchor, constant: 62),
+            panel.widthAnchor.constraint(lessThanOrEqualTo: safe.widthAnchor, constant: -24),
+            panel.widthAnchor.constraint(equalToConstant: CGFloat(items.count) * 86).withPriority(.defaultHigh),
+            row.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: 8),
+            row.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -8),
+            row.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: 8),
+            row.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -8),
+            row.heightAnchor.constraint(equalToConstant: 72),
+        ])
+        optionsTray = panel
+        optionsTrayDim = dim
+        view.bringSubviewToFront(dim)
+        view.bringSubviewToFront(panel)
+        NSLog("UT99 options tray opened mode=%@ profile=%@",
+              inMenu ? "menu" : "gameplay", activeTouchProfileName)
+    }
+
+    private func trayButton(
+        _ title: String,
+        detail: String? = nil,
+        symbol: String,
+        handler: @escaping () -> Void
+    ) -> UIButton {
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = title
+        configuration.subtitle = detail
+        configuration.image = UIImage(systemName: symbol)
+        configuration.imagePlacement = .top
+        configuration.imagePadding = 6
+        configuration.titleAlignment = .center
+        configuration.baseBackgroundColor = UIColor(white: 0.18, alpha: 0.92)
+        configuration.baseForegroundColor = .white
+        configuration.cornerStyle = .medium
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
+        // Fixed sizes: the tray must fit one row at any system text size.
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 11, weight: .bold)
+            return outgoing
+        }
+        configuration.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = .systemFont(ofSize: 9, weight: .medium)
+            outgoing.foregroundColor = UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 1)
+            return outgoing
+        }
+        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+        configuration.titleLineBreakMode = .byTruncatingTail
+        configuration.subtitleLineBreakMode = .byTruncatingTail
+        return UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
+            NSLog("UT99 options tray action=%@", title)
+            self?.closeOptionsTray()
+            // Run inline: the engine's main loop does not drain main.async.
+            handler()
+        })
+    }
+
+    private func closeOptionsTray() {
+        optionsTray?.removeFromSuperview()
+        optionsTray = nil
+        optionsTrayDim?.removeFromSuperview()
+        optionsTrayDim = nil
+    }
+
+    // MARK: Console
+
+    private func showConsoleBar() {
+        closeConsoleBar()
+        releaseGameplayInputs()
+        let bar = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.layer.cornerRadius = 14
+        bar.clipsToBounds = true
+
+        let field = UITextField()
+        field.placeholder = "Console: say hi · open 203.0.113.7:7777"
+        field.attributedPlaceholder = NSAttributedString(
+            string: field.placeholder ?? "",
+            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.45)]
+        )
+        field.textColor = .white
+        field.tintColor = UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 1)
+        field.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
+        // Console commands and cheats must reach UT exactly as typed.
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.spellCheckingType = .no
+        field.smartQuotesType = .no
+        field.smartDashesType = .no
+        field.smartInsertDeleteType = .no
+        field.keyboardType = .asciiCapable
+        field.returnKeyType = .send
+        field.delegate = self
+        field.accessibilityLabel = "Console command"
+
+        var historyConfiguration = UIButton.Configuration.plain()
+        historyConfiguration.image = UIImage(systemName: "arrow.up.circle")
+        historyConfiguration.baseForegroundColor = .white
+        let history = UIButton(configuration: historyConfiguration, primaryAction: UIAction { [weak self] _ in
+            self?.recallConsoleHistory()
+        })
+        history.accessibilityLabel = "Previous command"
+        var closeConfiguration = UIButton.Configuration.plain()
+        closeConfiguration.image = UIImage(systemName: "xmark.circle.fill")
+        closeConfiguration.baseForegroundColor = .white
+        let close = UIButton(configuration: closeConfiguration, primaryAction: UIAction { [weak self] _ in
+            self?.closeConsoleBar()
+        })
+        close.accessibilityLabel = "Close console"
+
+        let row = UIStackView(arrangedSubviews: [field, history, close])
+        row.axis = .horizontal
+        row.spacing = 6
+        row.alignment = .center
+        row.translatesAutoresizingMaskIntoConstraints = false
+        bar.contentView.addSubview(row)
+        view.addSubview(bar)
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 12),
+            bar.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -12),
+            bar.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
+            bar.heightAnchor.constraint(equalToConstant: 50),
+            row.leadingAnchor.constraint(equalTo: bar.contentView.leadingAnchor, constant: 14),
+            row.trailingAnchor.constraint(equalTo: bar.contentView.trailingAnchor, constant: -6),
+            row.topAnchor.constraint(equalTo: bar.contentView.topAnchor),
+            row.bottomAnchor.constraint(equalTo: bar.contentView.bottomAnchor),
+            history.widthAnchor.constraint(equalToConstant: 40),
+            close.widthAnchor.constraint(equalToConstant: 40),
+        ])
+        consoleBar = bar
+        consoleField = field
+        consoleHistoryIndex = nil
+        view.bringSubviewToFront(bar)
+        field.becomeFirstResponder()
+        NSLog("UT99 console bar opened")
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        guard textField === consoleField else { return true }
+        let command = (textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        closeConsoleBar()
+        guard !command.isEmpty else { return false }
+        var history = UserDefaults.standard.stringArray(forKey: Self.consoleHistoryKey) ?? []
+        history.removeAll { $0 == command }
+        history.insert(command, at: 0)
+        UserDefaults.standard.set(Array(history.prefix(Self.consoleHistoryLimit)), forKey: Self.consoleHistoryKey)
+        engineBridge.publishConsoleCommand(command)
+        return false
+    }
+
+    private func recallConsoleHistory() {
+        let history = UserDefaults.standard.stringArray(forKey: Self.consoleHistoryKey) ?? []
+        guard !history.isEmpty, let field = consoleField else { return }
+        let next = ((consoleHistoryIndex ?? -1) + 1) % history.count
+        consoleHistoryIndex = next
+        field.text = history[next]
+    }
+
+    private func closeConsoleBar() {
+        guard let bar = consoleBar else { return }
+        consoleField?.resignFirstResponder()
+        bar.removeFromSuperview()
+        consoleBar = nil
+        consoleField = nil
+        claimKeyboardResponder(reason: "console-bar-dismissed")
+    }
+
+    // MARK: Recent servers
+
+    private func showRecentServers() {
+        let servers = UT99RecentServer.load()
+        let alert = UIAlertController(
+            title: "Recent servers",
+            message: servers.isEmpty
+                ? "Servers you join appear here for one-tap reconnecting."
+                : "Reconnect with one tap.",
+            preferredStyle: .actionSheet
+        )
+        for server in servers {
+            let title = server.map.map { "\($0) · \(server.address)" } ?? server.address
+            alert.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                self?.engineBridge.publishConsoleCommand("open \(server.address)")
+                self?.showHostToast("Connecting to \(server.map ?? server.address)")
+            })
+        }
+        alert.addAction(UIAlertAction(title: "Server browser", style: .default) { [weak self] _ in
+            self?.showMultiplayerInfo()
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        presentActionSheet(alert)
+    }
+
+    // MARK: Toast
+
+    private func showHostToast(_ text: String) {
+        hostToast?.removeFromSuperview()
+        let label = UILabel()
+        label.text = "  \(text)  "
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 14, weight: .semibold)
+        label.backgroundColor = UIColor(white: 0.06, alpha: 0.82)
+        label.layer.cornerRadius = 12
+        label.clipsToBounds = true
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.isUserInteractionEnabled = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            label.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 64),
+            label.heightAnchor.constraint(equalToConstant: 32),
+        ])
+        hostToast = label
+        UIView.animate(withDuration: 0.35, delay: 2.2, options: [.allowUserInteraction]) {
+            label.alpha = 0
+        } completion: { [weak label] _ in
+            label?.removeFromSuperview()
+        }
+    }
+}
+
+private extension NSLayoutConstraint {
+    func withPriority(_ priority: UILayoutPriority) -> NSLayoutConstraint {
+        self.priority = priority
+        return self
+    }
 }

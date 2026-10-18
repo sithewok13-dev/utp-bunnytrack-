@@ -162,8 +162,13 @@ The touch interface is designed as a full-bleed landscape overlay:
   button and a CUSTOM button that runs a console command you choose
   (default `suicide`). UTP binds those two to Home and Insert in User.ini
   each time the game starts.
-- **Menus:** a persistent `•••` button opens host settings; MENU opens the
-  original Unreal interface.
+- **Menus:** while touch controls show, MENU replaces the `•••` button: tap
+  it for UT's menu, hold it for the options tray (profile, keyboard, console,
+  recent servers, MENU/PLAY, layout, settings, more). UTP follows UT's own
+  menu state, so UT menus are tapped directly — long-press to right-click,
+  e.g. to refresh or ping the server list.
+- **Profiles:** Standard and Bunny Track keep separate layouts and settings;
+  UTP switches to Bunny Track on `CTF-BT-` maps and back elsewhere.
 - **Customization:** opacity, scale, handedness, visibility, drag/pinch layout
   editing, saved profiles, and restore defaults.
 

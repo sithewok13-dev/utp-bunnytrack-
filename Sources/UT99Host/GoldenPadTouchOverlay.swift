@@ -169,6 +169,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     var onDodge: ((UT99DodgeDirection, _ undoLook: Bool) -> Void)?
     /// A look touch began; the host starts counting look it may need to undo.
     var onLookBegan: (() -> Void)?
+    /// MENU was held: the host opens its options tray.
+    var onMenuHold: (() -> Void)?
     var onMove: ((CGPoint, Bool) -> Void)?
     var onMenuCursorNudge: ((CGPoint) -> Void)?
     var onLook: ((CGPoint, Bool) -> Void)?
@@ -206,6 +208,15 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     /// The current look touch already fired a flick dodge; it stops turning
     /// the view until the thumb lifts.
     private var lookSuppressed = false
+    /// The MENU or CUSTOM press being timed, with its fill ring.
+    private weak var holdButton: UT99TouchActionButton?
+    private var holdAction: Action?
+    private var holdStart: CFTimeInterval = 0
+    private var holdFired = false
+    private var holdLink: CADisplayLink?
+    private let holdRing = CAShapeLayer()
+    static let menuHoldSeconds: CFTimeInterval = 0.45
+    static let customHoldSeconds: CFTimeInterval = 0.3
     private(set) var editingLayout = false
     private(set) var testingLayout = false
     private let layoutBanner = UILabel()
@@ -546,6 +557,22 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                         return true
                     }
                 }
+            } else if action == .pause || action == .customCommand {
+                // MENU: tap for UT's menu, hold for the options tray.
+                // CUSTOM: hold to confirm (optional). Sliding off cancels.
+                button.addTarget(self, action: #selector(holdTouchBegan(_:)), for: .touchDown)
+                button.addTarget(self, action: #selector(holdTouchEnded(_:)), for: [.touchUpInside])
+                button.addTarget(self, action: #selector(holdTouchCancelled(_:)),
+                                 for: [.touchUpOutside, .touchCancel, .touchDragExit])
+                if action == .pause {
+                    button.accessibilityCustomActions = [
+                        UIAccessibilityCustomAction(name: "Options") { [weak self] _ in
+                            guard let self, !self.editingLayout else { return false }
+                            self.onMenuHold?()
+                            return true
+                        }
+                    ]
+                }
             } else {
                 button.addTarget(self, action: #selector(buttonDown(_:)), for: [.touchDown, .touchDragEnter])
                 button.addTarget(self, action: #selector(buttonUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
@@ -646,10 +673,11 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func setButton(_ action: Action, center: CGPoint, size: CGSize, scale: CGFloat = 1) {
         guard let button = buttons[action] else { return }
+        // In UT's menus only MENU (BACK) stays; menus are tapped directly.
         button.isHidden = menuInteractionActive
-            ? action != .primaryFire && action != .pause
+            ? action != .pause
             : touchConfiguration.hiddenActions.contains(action.rawValue)
-        if menuInteractionActive && (action == .primaryFire || action == .pause) {
+        if menuInteractionActive && action == .pause {
             let safe = bounds.inset(by: safeAreaInsets).insetBy(dx: 18, dy: 18)
             let menuSize = action == .primaryFire
                 ? CGSize(width: 104, height: 104)
@@ -928,7 +956,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         guard menuInteractionActive != active else { return }
         releaseActiveInputs()
         menuInteractionActive = active
-        movePad.isHidden = false
+        // Menus are tapped directly, so neither stick may claim the touch.
+        movePad.isHidden = active
         lookPad.isHidden = active
         movePad.accessibilityLabel = active ? "Menu cursor" : "Movement"
         movePad.accessibilityHint = active
@@ -936,7 +965,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             : "Choose a direction from Actions. Choose Stop movement to release it."
         for (action, button) in buttons {
             button.isHidden = active
-                ? action != .primaryFire && action != .pause
+                ? action != .pause
                 : touchConfiguration.hiddenActions.contains(action.rawValue)
         }
         refreshActionTitles()
@@ -1325,6 +1354,92 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         onAction?(action, false)
     }
 
+    private func holdDuration(for action: Action) -> CFTimeInterval {
+        action == .pause ? Self.menuHoldSeconds : Self.customHoldSeconds
+    }
+
+    @objc private func holdTouchBegan(_ rawSender: UIButton) {
+        guard !editingLayout, let sender = rawSender as? UT99TouchActionButton,
+              let action = action(for: sender.tag) else { return }
+        if action == .customCommand && !touchConfiguration.customHoldToConfirm {
+            buttonDown(sender)
+            return
+        }
+        finishHold(cancelled: true)
+        holdButton = sender
+        holdAction = action
+        holdStart = CACurrentMediaTime()
+        holdFired = false
+        updateAppearance(of: sender, for: action, pressed: true)
+        actionHaptic.prepare()
+        holdRing.removeFromSuperlayer()
+        let inset = sender.bounds.insetBy(dx: 2, dy: 2)
+        holdRing.path = UIBezierPath(roundedRect: inset, cornerRadius: min(inset.width, inset.height) / 2).cgPath
+        holdRing.fillColor = UIColor.clear.cgColor
+        holdRing.strokeColor = UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 1).cgColor
+        holdRing.lineWidth = 3
+        holdRing.strokeEnd = 0
+        sender.layer.addSublayer(holdRing)
+        let link = CADisplayLink(target: self, selector: #selector(holdTick))
+        link.add(to: .main, forMode: .common)
+        holdLink = link
+    }
+
+    @objc private func holdTick() {
+        guard let action = holdAction, !holdFired else { return }
+        let progress = (CACurrentMediaTime() - holdStart) / holdDuration(for: action)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        holdRing.strokeEnd = CGFloat(min(progress, 1))
+        CATransaction.commit()
+        guard progress >= 1 else { return }
+        holdFired = true
+        actionHaptic.impactOccurred(intensity: 0.9)
+        if action == .pause {
+            onMenuHold?()
+        } else {
+            onAction?(action, true)
+            onAction?(action, false)
+        }
+        finishHold(cancelled: false)
+    }
+
+    @objc private func holdTouchEnded(_ rawSender: UIButton) {
+        guard let sender = rawSender as? UT99TouchActionButton, let action = action(for: sender.tag) else { return }
+        if action == .customCommand && !touchConfiguration.customHoldToConfirm && holdAction == nil {
+            buttonUp(sender)
+            return
+        }
+        // A short MENU tap is UT's own menu (Escape); a short CUSTOM tap is
+        // deliberately nothing.
+        let tapped = holdAction == action && !holdFired
+        finishHold(cancelled: true)
+        if tapped && action == .pause {
+            onAction?(.pause, true)
+            onAction?(.pause, false)
+        }
+    }
+
+    @objc private func holdTouchCancelled(_ rawSender: UIButton) {
+        guard let sender = rawSender as? UT99TouchActionButton, let action = action(for: sender.tag) else { return }
+        if action == .customCommand && !touchConfiguration.customHoldToConfirm && holdAction == nil {
+            buttonUp(sender)
+            return
+        }
+        finishHold(cancelled: true)
+    }
+
+    private func finishHold(cancelled: Bool) {
+        holdLink?.invalidate()
+        holdLink = nil
+        holdRing.removeFromSuperlayer()
+        if let button = holdButton, let action = holdAction {
+            updateAppearance(of: button, for: action, pressed: false)
+        }
+        holdButton = nil
+        holdAction = nil
+    }
+
     /// FIRE and ALT read as dodge buttons while FIRE/ALT dodging is on.
     private func refreshActionTitles() {
         buttons[.primaryFire]?.setTitle(menuInteractionActive ? "SELECT" : title(for: .primaryFire))
@@ -1384,6 +1499,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             }
         }
         moveAnchor = nil
+        finishHold(cancelled: true)
         dodgeTouchOrigin = nil
         if let dodge = buttons[.dodge] { updateAppearance(of: dodge, for: .dodge, pressed: false) }
         finishLookInput()

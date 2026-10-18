@@ -861,6 +861,28 @@ final class UT99EngineBridge {
         }
     }
 
+    /// Right-click a UWindow point: move the stock cursor there, then press
+    /// and release the right button. The server browser keeps refresh and
+    /// ping in this context menu.
+    func publishExternalMenuSecondaryClick(location: CGPoint) {
+        menuCursorQueue.async { [weak self] in
+            guard let self else { return }
+            let width = max(self.menuCursorCanvasSize.width, location.x)
+            let height = max(self.menuCursorCanvasSize.height, location.y)
+            self.menuCursorPosition = CGPoint(
+                x: min(max(location.x, 0), width),
+                y: min(max(location.y, 0), height)
+            )
+            self.publishGameSurfacePointer(location: self.menuCursorPosition, pressed: nil, anchor: true)
+            let (_, windowID) = self.focusedSDLWindow()
+            let x = Int32(self.menuCursorPosition.x.rounded())
+            let y = Int32(self.menuCursorPosition.y.rounded())
+            NSLog("UT99PointerBridge secondary click logical=%d,%d windowID=%u", x, y, windowID)
+            self.pushMouseButton(button: 3, pressed: true, windowID: windowID, x: x, y: y)
+            self.pushMouseButton(button: 3, pressed: false, windowID: windowID, x: x, y: y)
+        }
+    }
+
     func releaseMenuCursor() {
         menuCursorQueue.async { [weak self] in
             guard let self else { return }
@@ -1392,6 +1414,15 @@ final class UT99EngineBridge {
                 attempt: attempt + 1
             )
         }
+    }
+
+    /// Run a console command typed by the player (CONSOLE bar, recent-server
+    /// reconnect). Uses the same Tab-typed console path as the diagnostics.
+    func publishConsoleCommand(_ command: String) {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        NSLog("UT99KeyboardBridge console command length=%lu", trimmed.count)
+        submitConsoleCommand(trimmed)
     }
 
     private func submitConsoleCommand(_ command: String) {

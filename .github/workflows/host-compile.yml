@@ -26,6 +26,10 @@ jobs:
           newest="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
           sudo xcode-select -s "$newest"
           xcodebuild -version
+      - name: Host design contract checks
+        run: |
+          brew install ripgrep
+          ./Tests/test_host_state_and_data_menu.sh
       - name: Touch configuration tests
         run: ./Tests/test_touch_configuration.sh
       - name: Touch layout geometry tests

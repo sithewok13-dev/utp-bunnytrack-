@@ -78,6 +78,7 @@ private enum TouchConfigurationTests {
         require(menuMove.x == 0.20 && menuMove.y == 0.03, "menu cursor deliberate movement changed")
 
         verifyDodge(defaults: defaults)
+        verifyTouchFirstHost(defaults: defaults)
 
         print("UT99 touch configuration PASS persistence=true migration=true clamping=true deadZone=true acceleration=true invertY=true floatingCurve=true controllerCardinal=true dodge=true")
     }
@@ -229,6 +230,58 @@ private enum TouchConfigurationTests {
                 "command newline was not neutralized")
         require(UT99TouchKeyBindings.sanitizedCommand(String(repeating: "x", count: 500)).count ==
                 UT99TouchKeyBindings.maximumCommandLength, "command length was not bounded")
+    }
+
+    private static func verifyTouchFirstHost(defaults: UserDefaults) {
+        let standard = UT99TouchConfiguration.standard
+        require(standard.customHoldToConfirm && standard.autoProfileByMap && standard.autoMenuSwitch,
+                "touch-first defaults changed")
+        var changed = standard
+        changed.customHoldToConfirm = false
+        changed.autoProfileByMap = false
+        changed.autoMenuSwitch = false
+        changed.save(to: defaults)
+        require(UT99TouchConfiguration.load(from: defaults) == changed, "touch-first settings did not persist")
+
+        // Profile by map.
+        require(UT99TouchProfileName.forMap("CTF-BT-Andacs") == UT99TouchProfileName.bunnyTrack, "CTF-BT map missed")
+        require(UT99TouchProfileName.forMap("ctf-bt-(ice)-v2") == UT99TouchProfileName.bunnyTrack, "lowercase BT map missed")
+        require(UT99TouchProfileName.forMap("BT-Mesablanca") == UT99TouchProfileName.bunnyTrack, "bare BT map missed")
+        require(UT99TouchProfileName.forMap("CTF-Face") == UT99TouchProfileName.standard, "CTF map treated as BT")
+        require(UT99TouchProfileName.forMap("DM-Deck16][") == UT99TouchProfileName.standard, "DM map treated as BT")
+
+        // UT log lines.
+        typealias Event = UT99EngineLogEvent
+        func event(_ line: String) -> Event? { UT99EngineLogWatch.event(in: line) }
+        require(event("Log: LoadMap: CTF-BT-Andacs?Name=Player?Class=Botpack.TMale1") == .map("CTF-BT-Andacs"),
+                "LoadMap line not parsed")
+        require(event("Log: Browse: DM-Deck16][.unr?Game=Botpack.DeathMatchPlus") == .map("DM-Deck16]["),
+                "Browse map with .unr not parsed")
+        require(event("Browse: 203.0.113.7:7777/?Name=Player") == .server("203.0.113.7:7777"), "server join not parsed")
+        require(event("Log: Browse: unreal://203.0.113.7:7778/CTF-BT-x?Name=P") == .server("203.0.113.7:7778"),
+                "unreal:// server join not parsed")
+        require(event("Log: LoadMap: Entry") == nil && event("Log: Browse: UT-Logo-Map.unr") == nil,
+                "title maps must not switch profiles")
+        require(event("UT99 engine log map=CTF-BT-Andacs LoadMap: CTF-BT-Andacs") == nil,
+                "the host's own log lines must be ignored")
+        require(event("Log: Spawning game: Botpack.CTFGame") == nil, "unrelated line produced an event")
+        require(!UT99EngineLogWatch.isServerAddress("300.1.1.1:7777") &&
+                !UT99EngineLogWatch.isServerAddress("1.2.3.4") &&
+                !UT99EngineLogWatch.isServerAddress("1.2.3.4:99999"), "invalid server address accepted")
+
+        // Recent servers: newest first, de-duplicated, bounded, map kept.
+        var recent: [UT99RecentServer] = []
+        recent = UT99RecentServer.recording("1.1.1.1:7777", map: "CTF-BT-A", in: recent)
+        recent = UT99RecentServer.recording("2.2.2.2:7777", map: nil, in: recent)
+        recent = UT99RecentServer.recording("1.1.1.1:7777", map: nil, in: recent)
+        require(recent.map(\.address) == ["1.1.1.1:7777", "2.2.2.2:7777"], "recent servers not newest-first")
+        require(recent[0].map == "CTF-BT-A", "rejoin lost the server's map")
+        for index in 0..<10 {
+            recent = UT99RecentServer.recording("10.0.0.\(index):7777", map: nil, in: recent)
+        }
+        require(recent.count == UT99RecentServer.maximumCount, "recent servers not bounded")
+        UT99RecentServer.save(recent, to: defaults)
+        require(UT99RecentServer.load(from: defaults) == recent, "recent servers did not persist")
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
