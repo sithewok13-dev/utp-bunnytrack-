@@ -65,7 +65,7 @@ private final class UT99GameSurfaceInputView: UIView {
     private var menuLongPressLink: CADisplayLink?
     private let menuHaptic = UIImpactFeedbackGenerator(style: .medium)
     static let menuLongPressSeconds: CFTimeInterval = 0.5
-    static let menuDragThreshold: CGFloat = 12
+    static let menuDragThreshold: CGFloat = 20
     private var lastLookLocation: CGPoint?
     private var lastHoverLocation: CGPoint?
     private(set) var inputMode: InputMode = .originalMenu
@@ -4791,7 +4791,8 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         for subview in view.subviews where subview !== gameView &&
             subview !== gameSurfaceInputView && subview !== touchOverlay &&
             subview !== touchSettingsPanel && subview !== menuKeyboardPanel &&
-            subview !== launchTransitionView && subview !== menuButton {
+            subview !== launchTransitionView && subview !== menuButton &&
+            subview.tag != Self.touchFirstChromeTag {
             subview.isHidden = true
         }
         view.isUserInteractionEnabled = true
@@ -4900,7 +4901,8 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         for subview in view.subviews where subview !== gameView &&
             subview !== gameSurfaceInputView && subview !== touchOverlay &&
             subview !== touchSettingsPanel && subview !== menuKeyboardPanel &&
-            subview !== launchTransitionView && subview !== menuButton {
+            subview !== launchTransitionView && subview !== menuButton &&
+            subview.tag != Self.touchFirstChromeTag {
             subview.isHidden = true
         }
         // SDL can recreate or reorder its window after the first scene
@@ -5506,6 +5508,9 @@ extension GameViewController: UITextFieldDelegate {
     private static let consoleHistoryKey = "ut99.console.history.v1"
     private static let menuHoldHintShownKey = "ut99.touch.menuHoldHintShown.v1"
     private static let consoleHistoryLimit = 20
+    /// Host chrome added after the engine starts: the engine-surface
+    /// attachment must leave these visible.
+    static let touchFirstChromeTag = 0x55_54_50
 
     private var isEngineActive: Bool {
         hostState == .startingEngine || hostState == .running || hostState == .pausedBySystem
@@ -5530,6 +5535,7 @@ extension GameViewController: UITextFieldDelegate {
         menuKeyboardChip.accessibilityHint = "Types into the selected Unreal Tournament field."
         menuKeyboardChip.translatesAutoresizingMaskIntoConstraints = false
         menuKeyboardChip.isHidden = true
+        menuKeyboardChip.tag = Self.touchFirstChromeTag
         menuKeyboardChip.addAction(UIAction { [weak self] _ in self?.toggleMenuTextKeyboard() }, for: .touchUpInside)
         view.addSubview(menuKeyboardChip)
         NSLayoutConstraint.activate([
@@ -5599,11 +5605,18 @@ extension GameViewController: UITextFieldDelegate {
     /// UT's menus (a sure route to the host panel and Export Logs), and the
     /// keyboard chip only in UT's menus.
     private func updateTouchFirstChrome() {
+        // Change views only when their state really changes: every host
+        // layout pass re-runs the SDL window attachment, so touching the view
+        // tree on each tick would stall the engine several times a second.
         let touchMenuVisible = isEngineActive && !touchOverlay.isHidden
-        menuButton.isHidden = touchMenuVisible && hostMenuPanel == nil && !originalMenuInputActive
-        menuKeyboardChip.isHidden = !(isEngineActive && originalMenuInputActive && menuKeyboardPanel == nil &&
+        let hideMenuButton = touchMenuVisible && hostMenuPanel == nil && !originalMenuInputActive
+        if menuButton.isHidden != hideMenuButton { menuButton.isHidden = hideMenuButton }
+        let hideChip = !(isEngineActive && originalMenuInputActive && menuKeyboardPanel == nil &&
             consoleBar == nil && optionsTray == nil && hostMenuPanel == nil)
-        if !menuKeyboardChip.isHidden { view.bringSubviewToFront(menuKeyboardChip) }
+        if menuKeyboardChip.isHidden != hideChip {
+            menuKeyboardChip.isHidden = hideChip
+            if !hideChip { view.bringSubviewToFront(menuKeyboardChip) }
+        }
         if touchMenuVisible && !originalMenuInputActive &&
             !UserDefaults.standard.bool(forKey: Self.menuHoldHintShownKey) {
             UserDefaults.standard.set(true, forKey: Self.menuHoldHintShownKey)
@@ -5805,6 +5818,8 @@ extension GameViewController: UITextFieldDelegate {
             row.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -8),
             row.heightAnchor.constraint(equalToConstant: 72),
         ])
+        panel.tag = Self.touchFirstChromeTag
+        dim.tag = Self.touchFirstChromeTag
         optionsTray = panel
         optionsTrayDim = dim
         view.bringSubviewToFront(dim)
@@ -5926,6 +5941,7 @@ extension GameViewController: UITextFieldDelegate {
             history.widthAnchor.constraint(equalToConstant: 40),
             close.widthAnchor.constraint(equalToConstant: 40),
         ])
+        bar.tag = Self.touchFirstChromeTag
         consoleBar = bar
         consoleField = field
         consoleHistoryIndex = nil
@@ -6024,6 +6040,7 @@ extension GameViewController: UITextFieldDelegate {
         caption.frame.origin = CGPoint(x: point.x + size / 2 + 2, y: point.y - caption.bounds.height / 2)
         caption.isUserInteractionEnabled = false
         for marker in [ring, caption] {
+            marker.tag = Self.touchFirstChromeTag
             view.addSubview(marker)
             UIView.animate(withDuration: 0.4, delay: 1.2, options: [.allowUserInteraction]) {
                 marker.alpha = 0
@@ -6053,6 +6070,7 @@ extension GameViewController: UITextFieldDelegate {
             label.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 64),
             label.heightAnchor.constraint(equalToConstant: 32),
         ])
+        label.tag = Self.touchFirstChromeTag
         hostToast = label
         UIView.animate(withDuration: 0.35, delay: 2.2, options: [.allowUserInteraction]) {
             label.alpha = 0
