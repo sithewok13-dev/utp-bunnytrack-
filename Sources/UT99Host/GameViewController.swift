@@ -52,6 +52,8 @@ private final class UT99GameSurfaceInputView: UIView {
     var fingerMenuEnabled = false
     /// A finger tap clicks here (move, press, spaced release).
     var onMenuClick: ((CGPoint) -> Void)?
+    /// Debug: where a menu finger landed and what the host sent for it.
+    var onMenuTouchMarker: ((CGPoint, String) -> Void)?
     private weak var trackedTouch: UITouch?
     /// The finger currently driving UT's menus directly: tap clicks, drag
     /// holds the left button (scrollbars, sliders), long press right-clicks.
@@ -171,6 +173,7 @@ private final class UT99GameSurfaceInputView: UIView {
         // re-anchors it (as the trackpad path does); within the touch the
         // click lands on that same point.
         onPointer?(location, nil, true)
+        onMenuTouchMarker?(location, "TOUCH")
         menuHaptic.prepare()
         let link = CADisplayLink(target: self, selector: #selector(menuLongPressTick))
         link.add(to: .main, forMode: .common)
@@ -187,6 +190,7 @@ private final class UT99GameSurfaceInputView: UIView {
         stopMenuLongPressTimer()
         menuHaptic.impactOccurred()
         onSecondaryClick?(menuTouchStart)
+        onMenuTouchMarker?(menuTouchStart, "RIGHT-CLICK")
     }
 
     private func stopMenuLongPressTimer() {
@@ -204,6 +208,7 @@ private final class UT99GameSurfaceInputView: UIView {
             menuTouchDragging = true
             stopMenuLongPressTimer()
             onPointer?(menuTouchStart, true, false)
+            onMenuTouchMarker?(menuTouchStart, "DRAG")
         }
         onPointer?(location, nil, false)
     }
@@ -213,10 +218,14 @@ private final class UT99GameSurfaceInputView: UIView {
         stopMenuLongPressTimer()
         if menuTouchDragging {
             onPointer?(location, false, false)
+            onMenuTouchMarker?(location, "DRAG END")
         } else if !menuTouchLongPressed && !cancelled {
             // Click the anchored, highlighted point; a finger that shifted a
             // few points while lifting must not nudge the relative cursor.
             onMenuClick?(menuTouchStart)
+            onMenuTouchMarker?(menuTouchStart, "TAP")
+        } else if cancelled {
+            onMenuTouchMarker?(location, "CANCELLED")
         }
         menuTouch = nil
         menuTouchDragging = false
@@ -780,6 +789,9 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         gameSurfaceInputView.onMenuClick = { [weak self] location in
             guard let self else { return }
             self.engineBridge.publishExternalMenuClick(location: self.rendererPoint(fromHostPoint: location))
+        }
+        gameSurfaceInputView.onMenuTouchMarker = { [weak self] location, label in
+            self?.showTouchMarker(at: location, label: label)
         }
         gameSurfaceInputView.isPointerCaptured = { [weak self] in
             self?.pointerCaptureRoutingActive == true
@@ -3502,6 +3514,11 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         autoProfile.accessibilityLabel = "Use the Bunny Track profile on BT maps"
         autoProfile.addTarget(self, action: #selector(touchAutoProfileChanged(_:)), for: .valueChanged)
 
+        let touchMarkers = UISwitch()
+        touchMarkers.isOn = touchMarkersEnabled
+        touchMarkers.accessibilityLabel = "Show touch markers"
+        touchMarkers.addTarget(self, action: #selector(touchMarkersChanged(_:)), for: .valueChanged)
+
         let customVisible = UISwitch()
         customVisible.isOn = touchOverlay.isActionVisible(.customCommand)
         customVisible.accessibilityLabel = "Show CUSTOM button"
@@ -3535,6 +3552,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsSection("AUTOMATIC"),
             touchSettingsRow(title: "Menu controls in UT menus", control: autoMenu),
             touchSettingsRow(title: "BT profile on BT maps", control: autoProfile),
+            touchSettingsRow(title: "Show touch markers (debug)", control: touchMarkers),
             touchSettingsSection("DODGE"),
             touchSettingsRow(title: "Flick look side to dodge", control: flickDodge),
             touchSettingsRow(title: "Flick sensitivity", control: flickSensitivity),
@@ -3732,6 +3750,10 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         touchOverlay.setTouchConfiguration(configuration)
         // ALT must be on screen to dodge left.
         if sender.isOn { touchOverlay.setAction(.alternateFire, visible: true) }
+    }
+
+    @objc private func touchMarkersChanged(_ sender: UISwitch) {
+        UserDefaults.standard.set(sender.isOn, forKey: Self.touchMarkersKey)
     }
 
     @objc private func touchCustomHoldChanged(_ sender: UISwitch) {
@@ -5929,6 +5951,50 @@ extension GameViewController: UITextFieldDelegate {
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         presentActionSheet(alert)
+    }
+
+    // MARK: Touch markers (debug)
+
+    /// On by default while direct menu touch is being tuned on devices.
+    static let touchMarkersKey = "ut99.debug.touchMarkers.v1"
+
+    var touchMarkersEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.touchMarkersKey) as? Bool ?? true
+    }
+
+    /// Draw where a menu finger landed and what was sent, so a screen
+    /// recording shows the finger next to UT's own cursor.
+    private func showTouchMarker(at point: CGPoint, label text: String) {
+        NSLog("UT99 menu touch marker x=%.1f y=%.1f kind=%@", point.x, point.y, text)
+        guard touchMarkersEnabled else { return }
+        let size: CGFloat = 30
+        let ring = UIView(frame: CGRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size))
+        ring.isUserInteractionEnabled = false
+        ring.layer.cornerRadius = size / 2
+        ring.layer.borderWidth = 3
+        let color: UIColor = text == "TAP" ? .systemGreen : (text == "RIGHT-CLICK" ? .systemOrange : .systemYellow)
+        ring.layer.borderColor = color.cgColor
+        ring.backgroundColor = color.withAlphaComponent(0.18)
+        let dot = UIView(frame: CGRect(x: size / 2 - 2, y: size / 2 - 2, width: 4, height: 4))
+        dot.backgroundColor = color
+        dot.layer.cornerRadius = 2
+        ring.addSubview(dot)
+        let caption = UILabel()
+        caption.text = text == "TOUCH" ? nil : " \(text) "
+        caption.font = .monospacedSystemFont(ofSize: 10, weight: .bold)
+        caption.textColor = .black
+        caption.backgroundColor = color
+        caption.sizeToFit()
+        caption.frame.origin = CGPoint(x: point.x + size / 2 + 2, y: point.y - caption.bounds.height / 2)
+        caption.isUserInteractionEnabled = false
+        for marker in [ring, caption] {
+            view.addSubview(marker)
+            UIView.animate(withDuration: 0.4, delay: 1.2, options: [.allowUserInteraction]) {
+                marker.alpha = 0
+            } completion: { [weak marker] _ in
+                marker?.removeFromSuperview()
+            }
+        }
     }
 
     // MARK: Toast
