@@ -13,8 +13,8 @@ private func near(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat = 0.02) -> 
 }
 
 private let actionIDs: Set<String> = [
-    "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "use",
-    "nextWeapon", "previousWeapon", "scoreboard", "pause",
+    "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
+    "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause",
 ]
 
 private func verifyContained(_ frames: [String: CGRect], in safe: CGRect, name: String) {
@@ -63,10 +63,10 @@ verifyMirror(right: tablet, left: tabletLeft, safe: tabletSafe, name: "iPad")
 require(near(tablet["move"]!.midX / tabletSafe.width, 0.1310395315), "iPad move X drifted from EctoPad")
 require(near((tablet["move"]!.midY - tabletSafe.minY) / tabletSafe.height, 0.7905894519), "iPad move Y drifted")
 require(tablet["move"]!.width == 172, "iPad movement stick size drifted")
-require(tablet["primaryFire"]!.width == 104, "iPad FIRE hierarchy drifted")
+require(tablet["jump"]!.width == 104, "iPad JUMP must own the primary thumb position")
 require(tablet["leftPrimaryFire"]!.midX < tabletSafe.midX, "iPad duplicate FIRE left the movement side")
 require(tablet["alternateFire"]!.width == 76, "iPad ALT hierarchy drifted")
-require(tablet["jump"]!.width == 62 && tablet["crouch"]!.width == 62,
+require(tablet["primaryFire"]!.width == 62 && tablet["crouch"]!.width == 62,
         "iPad utility button hierarchy drifted")
 require(tablet["pause"]!.width == 134 && tablet["pause"]!.height == 62,
         "iPad MENU pill drifted")
@@ -81,7 +81,7 @@ for (offset, firstKey) in rightControls.enumerated() {
                 "iPad right controls overlap: \(firstKey) / \(secondKey)")
     }
 }
-require(tablet["alternateFire"]!.midX < tablet["primaryFire"]!.midX,
+require(tablet["alternateFire"]!.midX < tablet["jump"]!.midX,
         "iPad ALT must remain left of FIRE")
 require((tablet["pause"]!.midY - tabletSafe.minY) / tabletSafe.height < 0.15,
         "iPad MENU must remain outside the right-thumb look area")
@@ -134,10 +134,31 @@ let phoneLeft = UT99EctoPadReferenceLayout.phoneFrames(
 verifyContained(phone, in: phoneSafe, name: "iPhone")
 verifyContained(phoneLeft, in: phoneSafe, name: "iPhone southpaw")
 verifyMirror(right: phone, left: phoneLeft, safe: phoneSafe, name: "iPhone")
-require(phone["primaryFire"]!.width > phone["alternateFire"]!.width, "phone fire hierarchy collapsed")
+require(phone["jump"]!.width > phone["alternateFire"]!.width, "phone JUMP hierarchy collapsed")
+require(phone["jump"]!.width > phone["primaryFire"]!.width, "phone JUMP must be larger than FIRE")
+require(phone["primaryFire"]!.maxY < phone["jump"]!.minY, "phone FIRE must sit above JUMP")
+// DUCK owns the lower-right corner of the safe area.
+require(near(phone["crouch"]!.maxX, phoneSafe.maxX, tolerance: 20) && near(phone["crouch"]!.maxY, phoneSafe.maxY, tolerance: 20),
+        "phone DUCK left the lower-right corner")
+require(tablet["crouch"]!.midY > tablet["jump"]!.maxY, "iPad DUCK must sit below JUMP")
+let phoneRightControls = ["primaryFire", "alternateFire", "jump", "crouch", "dodge"]
+for (offset, firstKey) in phoneRightControls.enumerated() {
+    for secondKey in phoneRightControls.dropFirst(offset + 1) {
+        require(!phone[firstKey]!.intersects(phone[secondKey]!),
+                "iPhone right controls overlap: \(firstKey) / \(secondKey)")
+    }
+}
+for key in ["walk", "customCommand"] {
+    require(phone[key]!.midX < phoneSafe.midX && tablet[key]!.midX < tabletSafe.midX,
+            "\(key) must stay on the movement side")
+    require(!phone[key]!.intersects(phone["leftPrimaryFire"]!) && !phone[key]!.intersects(phone["move"]!),
+            "phone \(key) overlaps the movement controls")
+    require(!tablet[key]!.intersects(tablet["leftPrimaryFire"]!) && !tablet[key]!.intersects(tablet["move"]!),
+            "iPad \(key) overlaps the movement controls")
+}
 require(phone["leftPrimaryFire"]!.midX < phoneSafe.midX, "phone duplicate FIRE left the movement side")
 require(!phone["dodge"]!.intersects(phone["jump"]!), "phone DODGE overlaps JUMP")
-require(phone["dodge"]!.maxY < phone["jump"]!.minY, "phone DODGE must sit above JUMP")
+require(phone["dodge"]!.maxY < phone["primaryFire"]!.minY, "phone DODGE must sit above FIRE")
 require(tablet["dodge"]!.maxY < tablet["jump"]!.minY, "iPad DODGE must sit above JUMP")
 
 // Preserve coverage for the generic custom-placement collision solver used by
@@ -155,4 +176,4 @@ let fitted = UT99TouchLayoutGeometry.fittedScale(
 let customFrames = UT99TouchLayoutGeometry.frames(scale: fitted, controls: customControls)
 require(UT99TouchLayoutGeometry.collisionPairs(in: customFrames).isEmpty, "custom placement solver regressed")
 
-print("UT99 reference touch geometry PASS controls=12 tablet=true phone=true southpaw=true lookArea=screen")
+print("UT99 reference touch geometry PASS controls=14 tablet=true phone=true southpaw=true lookArea=screen")

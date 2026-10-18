@@ -150,12 +150,17 @@ The touch interface is designed as a full-bleed landscape overlay:
 
 - **Left thumb:** movement stick plus SCORE, USE, PREV, and NEXT utility
   directions.
-- **Right thumb:** look/aim stick, FIRE, ALT, JUMP, DUCK, and the DODGE
-  swipe pad: swipe left or right off it for a side dodge, up or down for a
-  forward or back dodge. It sends UT's normal double-tap on the matching
-  movement key, so it behaves exactly like keyboard dodging, including on
-  servers. Swipe distance, tap spacing, side-only mode, and haptics are in
-  Controls & Display.
+- **Right thumb:** look/aim stick, a large JUMP, FIRE above it, ALT, and DUCK
+  in the lower-right corner. A fast sideways flick anywhere on the look side
+  (outside the buttons) is a side dodge: UTP sends UT's normal double-tap on
+  the matching movement key, so it behaves exactly like keyboard dodging,
+  including on servers, and hands back the small turn the flick began. A
+  separate DODGE swipe pad is available in Controls & Display.
+- **Bunny Track:** Controls & Display → Apply BT Layout hides combat and
+  inventory buttons, slows the look curve, and adds a hold-to-walk WALK
+  button and a CUSTOM button that runs a console command you choose
+  (default `suicide`). UTP binds those two to Home and Insert in User.ini
+  each time the game starts.
 - **Menus:** a persistent `•••` button opens host settings; MENU opens the
   original Unreal interface.
 - **Customization:** opacity, scale, handedness, visibility, drag/pinch layout

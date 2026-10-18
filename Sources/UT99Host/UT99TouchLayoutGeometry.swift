@@ -167,13 +167,16 @@ enum UT99EctoPadReferenceLayout {
         var result = Dictionary(uniqueKeysWithValues: [
             frame("move", 0.1310395315, 0.7905894519, 172, 172),
             frame("leftPrimaryFire", 0.2050000000, 0.5900000000, 82, 82),
+            frame("walk", 0.1310395315, 0.5900000000, 62, 62),
+            frame("customCommand", 0.0600000000, 0.1050000000, 62, 62),
             // Actions sit on the far-right arc, leaving the middle-right of
-            // the screen as a long, unobstructed look surface.
-            frame("primaryFire", 0.8898305085, 0.6100000000, 104, 104),
+            // the screen as a long, unobstructed look surface. JUMP owns the
+            // primary thumb position: movement, not combat, is the core of
+            // trick-jump play.
+            frame("jump", 0.8898305085, 0.6100000000, 104, 104),
             frame("alternateFire", 0.8100000000, 0.7000000000, 76, 76),
-            frame("jump", 0.9661016949, 0.5100000000, 62, 62),
-            frame("crouch", 0.9661016949, 0.6200000000, 62, 62),
-            // DODGE sits directly above JUMP for a short dodge-then-jump hop.
+            frame("primaryFire", 0.9661016949, 0.5100000000, 62, 62),
+            frame("crouch", 0.9661016949, 0.9000000000, 62, 62),
             frame("dodge", 0.9661016949, 0.4000000000, 62, 62),
             frame("pause", 0.9400000000, 0.1050000000, 134, 62),
             // UT has four low-frequency utility actions that map cleanly to
@@ -209,23 +212,29 @@ enum UT99EctoPadReferenceLayout {
         let move = CGRect(x: minX + margin,
                           y: maxY - margin - stick,
                           width: stick, height: stick)
-        let fire = CGRect(x: maxX - margin - large,
+        // JUMP takes the large primary thumb position; FIRE sits above it.
+        let jump = CGRect(x: maxX - margin - large,
                           y: maxY - margin - large - 112 * scale,
                           width: large, height: large)
         let leftFire = CGRect(x: move.midX - medium / 2,
                               y: max(minY + margin, move.minY - medium - 10 * scale),
                               width: medium, height: medium)
-        let alt = CGRect(x: fire.minX - medium - 12 * scale,
-                         y: fire.midY + 8 - medium / 2,
-                         width: medium, height: medium)
-        let jump = CGRect(x: fire.midX - small / 2,
-                          y: fire.minY - small - 10 * scale,
+        let walk = CGRect(x: leftFire.midX - small / 2,
+                          y: max(minY + margin, leftFire.minY - small - 10 * scale),
                           width: small, height: small)
-        let crouch = CGRect(x: fire.minX - small - 8 * scale,
-                            y: fire.minY - small + 8,
-                            width: small, height: small)
-        let dodge = CGRect(x: fire.maxX - medium,
-                           y: jump.minY - medium - 8 * scale,
+        let custom = CGRect(x: minX + margin, y: minY + margin, width: small, height: small)
+        let alt = CGRect(x: jump.minX - medium - 12 * scale,
+                         y: jump.midY + 8 - medium / 2,
+                         width: medium, height: medium)
+        let fire = CGRect(x: jump.midX - small / 2,
+                          y: jump.minY - small - 10 * scale,
+                          width: small, height: small)
+        // DUCK in the lower-right corner, under the thumb's resting arc.
+        let crouch = CGRect(x: maxX - margin - medium,
+                            y: maxY - margin - medium,
+                            width: medium, height: medium)
+        let dodge = CGRect(x: jump.maxX - medium,
+                           y: fire.minY - medium - 8 * scale,
                            width: medium, height: medium)
         let d = 36 * scale
         let dCenter = CGPoint(x: move.maxX + 18 * scale + 1.5 * d, y: move.midY)
@@ -234,6 +243,8 @@ enum UT99EctoPadReferenceLayout {
             "move": move,
             "primaryFire": fire,
             "leftPrimaryFire": leftFire,
+            "walk": walk,
+            "customCommand": custom,
             "alternateFire": alt,
             "jump": jump,
             "crouch": crouch,

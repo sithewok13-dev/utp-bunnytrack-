@@ -95,7 +95,11 @@ private enum TouchConfigurationTests {
         require(migrated.dodgeSwipeDistance == 18 && !migrated.dodgeSideOnly &&
                 migrated.dodgeHaptics && migrated.dodgeStepMilliseconds == 50,
                 "legacy configuration did not take standard dodge settings")
-        require(!migrated.hiddenActions.contains("dodge"), "DODGE must be visible by default")
+        require(migrated.flickDodgeEnabled && migrated.flickDodgeDistance == 40 &&
+                migrated.flickDodgeMilliseconds == 150 && migrated.customCommand == "suicide",
+                "legacy configuration did not take standard flick and CUSTOM settings")
+        require(UT99TouchConfiguration.standard.hiddenActions.isSuperset(of: ["dodge", "walk", "customCommand"]),
+                "DODGE pad, WALK and CUSTOM must start hidden outside the BT layout")
 
         var dodge = UT99TouchConfiguration.standard
         dodge.dodgeSwipeDistance = 26
@@ -103,6 +107,10 @@ private enum TouchConfigurationTests {
         dodge.dodgeHaptics = false
         dodge.dodgeStepMilliseconds = 70
         dodge.hiddenActions = ["dodge"]
+        dodge.flickDodgeEnabled = false
+        dodge.flickDodgeDistance = 55
+        dodge.flickDodgeMilliseconds = 120
+        dodge.customCommand = "mutate checkpoint"
         dodge.save(to: defaults)
         require(UT99TouchConfiguration.load(from: defaults) == dodge, "dodge settings did not persist")
 
@@ -162,6 +170,8 @@ private enum TouchConfigurationTests {
         let clamped = UT99DodgePlan.edges(targetHeld: false, oppositeHeld: false, stepMilliseconds: 5)
         require(clamped.map(\.atMilliseconds) == [0, 20, 40], "dodge step was not clamped")
 
+        verifyBunnyTrack()
+
         // Hand-back after the tap: the target is physically down, the
         // opposite is up; both return to whatever the stick holds now.
         require(UT99DodgePlan.restore(targetHeld: true, oppositeHeld: false).isEmpty,
@@ -170,6 +180,51 @@ private enum TouchConfigurationTests {
         require(released.count == 2 && released[0].key == .target && !released[0].pressed &&
                 released[1].key == .opposite && released[1].pressed,
                 "restore must lift the target and give the opposite back to the stick")
+    }
+
+    private static func verifyBunnyTrack() {
+        // The BT preset hides combat clutter and keeps the BT tools.
+        let preset = UT99TouchConfiguration.standard.applyingBunnyTrackPreset()
+        require(preset.hiddenActions == UT99TouchConfiguration.bunnyTrackHiddenActions, "BT preset hidden set changed")
+        require(!preset.hiddenActions.contains("walk") && !preset.hiddenActions.contains("customCommand") &&
+                !preset.hiddenActions.contains("jump") && !preset.hiddenActions.contains("crouch") &&
+                !preset.hiddenActions.contains("primaryFire"),
+                "BT preset hid a control a trick-jump run needs")
+        require(preset.flickDodgeEnabled && preset.lookAcceleration == 0.2, "BT preset look tuning changed")
+        require(UT99TouchConfiguration.bunnyTrackHiddenActions.isSubset(of: UT99TouchConfiguration.supportedActionIDs),
+                "BT preset names an unknown control")
+
+        // Look-side flick: fast, long and clearly sideways dodges; anything
+        // else stays looking.
+        func flick(_ x: CGFloat, _ y: CGFloat, _ ms: Double) -> UT99DodgeDirection? {
+            UT99FlickDodge.direction(for: CGPoint(x: x, y: y), elapsedMilliseconds: ms,
+                                     distance: 40, windowMilliseconds: 150)
+        }
+        require(flick(-40, 0, 100) == .left && flick(45, 10, 150) == .right, "sideways flick did not dodge")
+        require(flick(39, 0, 50) == nil, "short flick dodged")
+        require(flick(80, 0, 151) == nil, "slow swipe dodged instead of looking")
+        require(flick(50, 30, 80) == nil, "diagonal aim correction dodged")
+        require(flick(0, -80, 50) == nil, "vertical flick dodged")
+
+        // User.ini: replace the two bindings in [Engine.Input] and nothing else.
+        let ini = "[Engine.Input]\r\nAliases[0]=(Command=\"Button bFire\",Alias=Fire)\r\nHome=\r\nInsert=OldThing\r\nW=MoveForward\r\n[Engine.Console]\r\nInsert=Untouched\r\n"
+        let bound = UT99TouchKeyBindings.applying(to: ini, customCommand: "suicide")
+        require(bound.contains("\r\nHome=Walking\r\n") && bound.contains("\r\nInsert=suicide\r\n"),
+                "WALK/CUSTOM bindings were not written")
+        require(bound.contains("W=MoveForward\r\n") && bound.contains("[Engine.Console]\r\nInsert=Untouched"),
+                "binding rewrite touched other lines or sections")
+        require(UT99TouchKeyBindings.applying(to: bound, customCommand: "suicide") == bound,
+                "binding rewrite is not idempotent")
+        let added = UT99TouchKeyBindings.applying(to: "[Engine.Input]\nW=MoveForward\n", customCommand: "mutate cp")
+        require(added == "[Engine.Input]\nHome=Walking\nInsert=mutate cp\nW=MoveForward\n",
+                "missing bindings were not added under [Engine.Input]")
+        let section = UT99TouchKeyBindings.applying(to: "[URL]\nMap=Index.unr", customCommand: "suicide")
+        require(section.hasSuffix("\n\n[Engine.Input]\nHome=Walking\nInsert=suicide"),
+                "missing [Engine.Input] section was not appended")
+        require(UT99TouchKeyBindings.sanitizedCommand("  suicide\nquit ") == "suicide quit",
+                "command newline was not neutralized")
+        require(UT99TouchKeyBindings.sanitizedCommand(String(repeating: "x", count: 500)).count ==
+                UT99TouchKeyBindings.maximumCommandLength, "command length was not bounded")
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {

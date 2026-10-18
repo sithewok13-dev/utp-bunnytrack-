@@ -54,6 +54,11 @@ final class UT99EngineBridge {
     /// for them, but only the dodge pushes their edges until it finishes.
     private var dodgeKeys = Set<Int32>()
     private let dodgeQueue = DispatchQueue(label: "com.ut99apple.touch-dodge", qos: .userInteractive)
+    /// Relative look published since the current look touch began, so a
+    /// look-side flick that turns out to be a dodge can hand the view back.
+    private let lookUndoLock = NSLock()
+    private var lookUndoX: Int64 = 0
+    private var lookUndoY: Int64 = 0
     private let controllerLookQueue = DispatchQueue(label: "com.ut99apple.controller-look", qos: .userInteractive)
     private var controllerLookValue = CGPoint.zero
     private var controllerLookTimer: DispatchSourceTimer?
@@ -153,6 +158,7 @@ final class UT99EngineBridge {
         } catch {
             return .failed("runtime configuration preparation failed: \(error.localizedDescription)")
         }
+        applyTouchKeyBindings(userIni: systemRoot.appendingPathComponent("User.ini"))
         var missingRuntimeFiles = UT99RuntimeSupport.missingRuntimeFiles(at: supportRoot)
         if !FileManager.default.fileExists(atPath: systemRoot.appendingPathComponent("default.metallib").path) {
             missingRuntimeFiles.append("default.metallib")
@@ -506,6 +512,8 @@ final class UT99EngineBridge {
         case .use: pushKey(key: 13, pressed: pressed) // Enter=InventoryActivate
         case .crouch: pushKey(key: 99, pressed: pressed) // C=Duck
         case .dodge: break // Directional; the DODGE pad publishes through publishTouchDodge.
+        case .walk: pushKey(key: (1 << 30) | 74, pressed: pressed) // Home=Walking, bound by the host
+        case .customCommand: pushKey(key: (1 << 30) | 73, pressed: pressed) // Insert=player's command
         case .nextWeapon: if pressed { pushMouseWheel(y: -1) } // MouseWheelDown
         case .previousWeapon: if pressed { pushMouseWheel(y: 1) } // MouseWheelUp
         case .scoreboard: pushKey(key: 1 << 30 | 58, pressed: pressed) // F1=ShowScores
@@ -548,6 +556,26 @@ final class UT99EngineBridge {
         // An in-flight dodge releases its own keys when it hands them back.
         for key in movementKeys where !dodgeKeys.contains(key) { pushKey(key: key, pressed: false) }
         movementKeys.removeAll()
+    }
+
+    /// Bind the WALK and CUSTOM buttons' keys before the engine reads
+    /// User.ini. Best effort: a failure leaves those two buttons unbound but
+    /// must never block the game from starting.
+    private func applyTouchKeyBindings(userIni url: URL) {
+        guard let original = try? String(contentsOf: url, encoding: .utf8) else {
+            NSLog("UT99TouchBridge key bindings skipped reason=unreadable path=%@", url.path)
+            return
+        }
+        let command = UT99TouchConfiguration.load().customCommand
+        let updated = UT99TouchKeyBindings.applying(to: original, customCommand: command)
+        guard updated != original else { return }
+        do {
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+            NSLog("UT99TouchBridge key bindings applied walk=%@ custom=%@",
+                  UT99TouchKeyBindings.walkKeyName, UT99TouchKeyBindings.customKeyName)
+        } catch {
+            NSLog("UT99TouchBridge key bindings failed error=%@", error.localizedDescription)
+        }
     }
 
     /// The verified v469e User.ini binds movement to the arrow keys.
@@ -623,11 +651,39 @@ final class UT99EngineBridge {
             configuration: UT99TouchConfiguration.load(),
             invertY: invertY
         )
-        pushMouseMotion(
-            xrel: Int32((tuned.x * 2_700).rounded()),
-            yrel: Int32((tuned.y * 2_700).rounded())
-        )
+        let xrel = Int32((tuned.x * 2_700).rounded())
+        let yrel = Int32((tuned.y * 2_700).rounded())
+        pushMouseMotion(xrel: xrel, yrel: yrel)
+        if xrel != 0 || yrel != 0 {
+            lookUndoLock.lock()
+            lookUndoX += Int64(xrel)
+            lookUndoY += Int64(yrel)
+            lookUndoLock.unlock()
+        }
         if !active { pushMouseMotion(xrel: 0, yrel: 0) }
+    }
+
+    /// Start counting touch look from zero; called when a look touch begins.
+    func markTouchLookUndo() {
+        lookUndoLock.lock()
+        lookUndoX = 0
+        lookUndoY = 0
+        lookUndoLock.unlock()
+    }
+
+    /// Turn the view back by everything published since the mark. A
+    /// look-side flick rotates the view slightly before it is recognized as
+    /// a dodge; undoing it keeps the dodge on the line the player aimed.
+    func undoTouchLookSinceMark() {
+        lookUndoLock.lock()
+        let x = lookUndoX
+        let y = lookUndoY
+        lookUndoX = 0
+        lookUndoY = 0
+        lookUndoLock.unlock()
+        guard x != 0 || y != 0 else { return }
+        NSLog("UT99TouchBridge look undo x=%lld y=%lld", x, y)
+        pushMouseMotion(xrel: Int32(clamping: -x), yrel: Int32(clamping: -y))
     }
 
     /// GCMouse reports unaccelerated device deltas. Forward those deltas

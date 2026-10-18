@@ -158,14 +158,17 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     }
 
     enum Action: String, CaseIterable {
-        case primaryFire, leftPrimaryFire, alternateFire, jump, crouch, dodge
-        case use, nextWeapon, previousWeapon, scoreboard, pause
+        case primaryFire, leftPrimaryFire, alternateFire, jump, crouch, dodge, walk
+        case use, nextWeapon, previousWeapon, scoreboard, customCommand, pause
     }
 
     var onAction: ((Action, Bool) -> Void)?
-    /// DODGE is a swipe pad, not a held button: it publishes one direction
-    /// per touch instead of press/release edges through `onAction`.
-    var onDodge: ((UT99DodgeDirection) -> Void)?
+    /// Dodges publish one direction per gesture instead of press/release
+    /// edges through `onAction`. `undoLook` is true for a look-side flick,
+    /// whose first frames already turned the view before it was recognized.
+    var onDodge: ((UT99DodgeDirection, _ undoLook: Bool) -> Void)?
+    /// A look touch began; the host starts counting look it may need to undo.
+    var onLookBegan: (() -> Void)?
     var onMove: ((CGPoint, Bool) -> Void)?
     var onMenuCursorNudge: ((CGPoint) -> Void)?
     var onLook: ((CGPoint, Bool) -> Void)?
@@ -197,6 +200,12 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     /// Where the current DODGE touch landed, in overlay coordinates. Nil when
     /// the pad is idle or this touch has already fired its one dodge.
     private var dodgeTouchOrigin: CGPoint?
+    /// When the current look touch began, while it can still become a
+    /// flick dodge. Nil once the flick window has passed or a dodge fired.
+    private var lookFlickStart: CFTimeInterval?
+    /// The current look touch already fired a flick dodge; it stops turning
+    /// the view until the thumb lifts.
+    private var lookSuppressed = false
     private(set) var editingLayout = false
     private(set) var testingLayout = false
     private let layoutBanner = UILabel()
@@ -215,13 +224,14 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         "menuBack": .init(x: 0.8590047393364929, y: 0.3128205128205128, scale: 1),
         "menuSelect": .init(x: 0.7847551342812006, y: 0.5931623931623932, scale: 1),
         "move": .init(x: 0.15639810426540285, y: 0.7470085470085469, scale: 1),
-        "primaryFire": .init(x: 0.8175355450236966, y: 0.6376068376068377, scale: 1),
+        // JUMP and FIRE trade the accepted positions: JUMP takes the large
+        // primary thumb spot. DUCK has no entry so it takes the reference
+        // layout's lower-right corner.
+        "jump": .init(x: 0.8175355450236966, y: 0.6376068376068377, scale: 1),
         "alternateFire": .init(x: 0.75, y: 0.5367521367521367, scale: 1),
-        "jump": .init(x: 0.8554502369668247, y: 0.4675213675213675, scale: 1.2872077226638794),
-        // Up and right of JUMP so dodge-then-jump is one short thumb hop, and
-        // clear of the host's three-dot button above it.
+        "primaryFire": .init(x: 0.8554502369668247, y: 0.4675213675213675, scale: 1.2872077226638794),
+        // Up and right of FIRE, clear of the host's three-dot button above it.
         "dodge": .init(x: 0.905, y: 0.32, scale: 1),
-        "crouch": .init(x: 0.7942338072669826, y: 0.4273504273504274, scale: 1),
         "previousWeapon": .init(x: 0.22946287519747235, y: 0.5863247863247864, scale: 1.1761363744735718),
         "nextWeapon": .init(x: 0.28080568720379145, y: 0.5923076923076923, scale: 1.226136326789856),
         "use": .init(x: 0.2531595576619273, y: 0.7059829059829059, scale: 1.3332443237304688),
@@ -532,7 +542,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                 button.accessibilityCustomActions = UT99DodgeDirection.allCases.map { direction in
                     UIAccessibilityCustomAction(name: "Dodge \(direction.rawValue)") { [weak self] _ in
                         guard let self, !self.editingLayout, !self.menuInteractionActive else { return false }
-                        self.onDodge?(direction)
+                        self.onDodge?(direction, false)
                         return true
                     }
                 }
@@ -824,6 +834,28 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         touchConfiguration.save(to: defaults)
         alpha = touchOpacity
         setNeedsLayout()
+    }
+
+    /// One-tap Bunny Track setup: the jump-first default positions, combat
+    /// clutter hidden, a slower look curve, and look-side flick dodging.
+    /// WALK takes the duplicate FIRE position the preset hides.
+    func applyBunnyTrackLayout() {
+        releaseActiveInputs()
+        placements.removeAll()
+        touchConfiguration = touchConfiguration.applyingBunnyTrackPreset()
+        touchConfiguration.save()
+        setNeedsLayout()
+        layoutIfNeeded()
+        if let duplicateFire = buttons[.leftPrimaryFire], bounds.width > 0, bounds.height > 0 {
+            placements[Action.walk.rawValue] = UT99TouchPlacement(
+                x: duplicateFire.center.x / bounds.width,
+                y: duplicateFire.center.y / bounds.height,
+                scale: 1.25
+            )
+        }
+        savePlacements()
+        setNeedsLayout()
+        NSLog("UT99 touch Bunny Track layout applied hidden=%lu", touchConfiguration.hiddenActions.count)
     }
 
     func setLeftHanded(_ enabled: Bool) {
@@ -1120,9 +1152,38 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             lookRing.center = point
             lookRing.isHidden = false
             lookThumb.transform = .identity
+            lookSuppressed = false
+            lookFlickStart = touchConfiguration.flickDodgeEnabled ? CACurrentMediaTime() : nil
+            if touchConfiguration.flickDodgeEnabled && touchConfiguration.dodgeHaptics { dodgeHaptic.prepare() }
+            onLookBegan?()
             startLookDisplayLink()
         }
         guard let anchor = lookAnchor else { return }
+        if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+            finishLookInput()
+            return
+        }
+        if lookSuppressed { return }
+        if let start = lookFlickStart {
+            let elapsed = (CACurrentMediaTime() - start) * 1000
+            if let direction = UT99FlickDodge.direction(
+                for: CGPoint(x: point.x - anchor.x, y: point.y - anchor.y),
+                elapsedMilliseconds: elapsed,
+                distance: CGFloat(touchConfiguration.flickDodgeDistance),
+                windowMilliseconds: Double(touchConfiguration.flickDodgeMilliseconds)
+            ) {
+                // A fast sideways flick: dodge, hand back the view it turned,
+                // and stop looking until this thumb lifts.
+                lookFlickStart = nil
+                lookSuppressed = true
+                lookValue = .zero
+                lookThumb.transform = .identity
+                if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
+                onDodge?(direction, true)
+                return
+            }
+            if elapsed > Double(touchConfiguration.flickDodgeMilliseconds) { lookFlickStart = nil }
+        }
         lookValue = normalizedStickValue(
             point: point,
             center: anchor,
@@ -1134,9 +1195,6 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             translationX: lookValue.x * travel,
             y: lookValue.y * travel
         )
-        if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
-            finishLookInput()
-        }
     }
 
     private func startLookDisplayLink() {
@@ -1160,6 +1218,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         lookDisplayLink = nil
         lookAnchor = nil
         lookValue = .zero
+        lookFlickStart = nil
+        lookSuppressed = false
         lookThumb.transform = .identity
         lookRing.isHidden = !testingLayout
         onLook?(.zero, false)
@@ -1262,7 +1322,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         // once per touch: a second dodge needs a fresh swipe.
         dodgeTouchOrigin = nil
         if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
-        onDodge?(direction)
+        onDodge?(direction, false)
         updateAppearance(of: button, for: .dodge, pressed: false)
     }
 
@@ -1319,6 +1379,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .use: "USE"
         case .crouch: "DUCK"
         case .dodge: "DODGE"
+        case .walk: "WALK"
+        case .customCommand: "CUSTOM"
         case .nextWeapon: "WPN +"
         case .previousWeapon: "WPN −"
         case .scoreboard: "SCORE"
@@ -1334,6 +1396,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .use: "hand.tap.fill"
         case .crouch: "arrow.down"
         case .dodge: "arrow.left.and.right"
+        case .walk: "figure.walk"
+        case .customCommand: "star.fill"
         case .nextWeapon: "chevron.forward"
         case .previousWeapon: "chevron.backward"
         case .scoreboard: "list.number"
@@ -1360,6 +1424,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .use: "Activates doors, lifts, and inventory"
         case .crouch: "Crouches while held"
         case .dodge: "Swipe left or right to side dodge, or up or down to dodge forward or back"
+        case .walk: "Walks slowly and precisely while held"
+        case .customCommand: "Runs the console command set in Controls and Display"
         case .nextWeapon: "Selects the next weapon"
         case .previousWeapon: "Selects the previous weapon"
         case .scoreboard: "Shows the match scoreboard"
@@ -1378,7 +1444,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .alternateFire: UIColor(red: 0.78, green: 0.10, blue: 0.13, alpha: 0.92)
         case .jump, .crouch: UIColor(white: 0.72, alpha: 0.92)
         case .dodge: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
-        case .use, .scoreboard, .nextWeapon, .previousWeapon: UIColor(white: 0.22, alpha: 0.88)
+        case .use, .scoreboard, .nextWeapon, .previousWeapon, .walk, .customCommand: UIColor(white: 0.22, alpha: 0.88)
         case .pause: UIColor(white: 0.28, alpha: 0.92)
         }
     }

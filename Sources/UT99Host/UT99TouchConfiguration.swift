@@ -3,9 +3,16 @@ import Foundation
 struct UT99TouchConfiguration: Codable, Equatable {
     static let defaultsKey = "ut99.touch.configuration.v1"
     static let supportedActionIDs: Set<String> = [
-        "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "use",
-        "nextWeapon", "previousWeapon", "scoreboard", "pause"
+        "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
+        "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause"
     ]
+    /// Controls the Bunny Track layout hides: combat and inventory buttons a
+    /// trick-jump run never needs, plus the DODGE pad the look-side flick
+    /// replaces.
+    static let bunnyTrackHiddenActions: Set<String> = [
+        "leftPrimaryFire", "alternateFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "dodge"
+    ]
+    static let defaultCustomCommand = "suicide"
 
     var leftHanded: Bool
     var hiddenActions: Set<String>
@@ -23,6 +30,15 @@ struct UT99TouchConfiguration: Codable, Equatable {
     /// survive at least one engine tick, and the whole tap must still land
     /// inside UT's 0.25s DodgeClickTime.
     var dodgeStepMilliseconds: Int
+    /// A fast sideways flick on the look side dodges instead of turning.
+    var flickDodgeEnabled: Bool
+    /// Horizontal travel, in points, a look-side flick needs to dodge.
+    var flickDodgeDistance: Double
+    /// A flick only dodges if it covers that distance within this window;
+    /// slower movement stays ordinary looking.
+    var flickDodgeMilliseconds: Int
+    /// Console command bound to the CUSTOM button's key (Insert).
+    var customCommand: String
 
     init(
         leftHanded: Bool,
@@ -34,7 +50,11 @@ struct UT99TouchConfiguration: Codable, Equatable {
         dodgeSwipeDistance: Double = 18,
         dodgeSideOnly: Bool = false,
         dodgeHaptics: Bool = true,
-        dodgeStepMilliseconds: Int = 50
+        dodgeStepMilliseconds: Int = 50,
+        flickDodgeEnabled: Bool = true,
+        flickDodgeDistance: Double = 40,
+        flickDodgeMilliseconds: Int = 150,
+        customCommand: String = UT99TouchConfiguration.defaultCustomCommand
     ) {
         self.leftHanded = leftHanded
         self.hiddenActions = hiddenActions
@@ -46,11 +66,17 @@ struct UT99TouchConfiguration: Codable, Equatable {
         self.dodgeSideOnly = dodgeSideOnly
         self.dodgeHaptics = dodgeHaptics
         self.dodgeStepMilliseconds = dodgeStepMilliseconds
+        self.flickDodgeEnabled = flickDodgeEnabled
+        self.flickDodgeDistance = flickDodgeDistance
+        self.flickDodgeMilliseconds = flickDodgeMilliseconds
+        self.customCommand = customCommand
     }
 
     static let standard = UT99TouchConfiguration(
         leftHanded: false,
-        hiddenActions: ["scoreboard"],
+        // The look-side flick replaces the DODGE pad, and WALK and CUSTOM are
+        // Bunny Track tools; the BT layout turns the last two on.
+        hiddenActions: ["scoreboard", "dodge", "walk", "customCommand"],
         lookAcceleration: 0.45,
         lookDeadZone: 0.00025,
         movementDeadZone: 0.04,
@@ -69,7 +95,11 @@ struct UT99TouchConfiguration: Codable, Equatable {
             dodgeSideOnly: dodgeSideOnly,
             dodgeHaptics: dodgeHaptics,
             dodgeStepMilliseconds: min(max(dodgeStepMilliseconds, UT99DodgePlan.minimumStepMilliseconds),
-                                       UT99DodgePlan.maximumStepMilliseconds)
+                                       UT99DodgePlan.maximumStepMilliseconds),
+            flickDodgeEnabled: flickDodgeEnabled,
+            flickDodgeDistance: min(max(flickDodgeDistance, 20), 90),
+            flickDodgeMilliseconds: min(max(flickDodgeMilliseconds, 60), 300),
+            customCommand: UT99TouchKeyBindings.sanitizedCommand(customCommand)
         )
     }
 
@@ -99,6 +129,13 @@ struct UT99TouchConfiguration: Codable, Equatable {
             configuration.hiddenActions.insert("scoreboard")
             defaults.set(true, forKey: scoreMigrationKey)
         }
+        // The DODGE pad shipped visible before the look-side flick replaced
+        // it; WALK and CUSTOM are new. Hide all three once, as for SCORE.
+        let bunnyTrackMigrationKey = "ut99.touch.migration.bunnyTrackControls.v1"
+        if !defaults.bool(forKey: bunnyTrackMigrationKey) {
+            configuration.hiddenActions.formUnion(["dodge", "walk", "customCommand"])
+            defaults.set(true, forKey: bunnyTrackMigrationKey)
+        }
         configuration.save(to: defaults)
         return configuration
     }
@@ -112,6 +149,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case leftHanded, hiddenActions, lookAcceleration, lookDeadZone, movementDeadZone, autoHideForController
         case dodgeSwipeDistance, dodgeSideOnly, dodgeHaptics, dodgeStepMilliseconds
+        case flickDodgeEnabled, flickDodgeDistance, flickDodgeMilliseconds, customCommand
     }
 
     init(from decoder: Decoder) throws {
@@ -131,6 +169,14 @@ struct UT99TouchConfiguration: Codable, Equatable {
         dodgeHaptics = try container.decodeIfPresent(Bool.self, forKey: .dodgeHaptics) ?? standard.dodgeHaptics
         dodgeStepMilliseconds = try container.decodeIfPresent(Int.self, forKey: .dodgeStepMilliseconds)
             ?? standard.dodgeStepMilliseconds
+        flickDodgeEnabled = try container.decodeIfPresent(Bool.self, forKey: .flickDodgeEnabled)
+            ?? standard.flickDodgeEnabled
+        flickDodgeDistance = try container.decodeIfPresent(Double.self, forKey: .flickDodgeDistance)
+            ?? standard.flickDodgeDistance
+        flickDodgeMilliseconds = try container.decodeIfPresent(Int.self, forKey: .flickDodgeMilliseconds)
+            ?? standard.flickDodgeMilliseconds
+        customCommand = try container.decodeIfPresent(String.self, forKey: .customCommand)
+            ?? standard.customCommand
     }
 
     func encode(to encoder: Encoder) throws {
@@ -145,6 +191,94 @@ struct UT99TouchConfiguration: Codable, Equatable {
         try container.encode(dodgeSideOnly, forKey: .dodgeSideOnly)
         try container.encode(dodgeHaptics, forKey: .dodgeHaptics)
         try container.encode(dodgeStepMilliseconds, forKey: .dodgeStepMilliseconds)
+        try container.encode(flickDodgeEnabled, forKey: .flickDodgeEnabled)
+        try container.encode(flickDodgeDistance, forKey: .flickDodgeDistance)
+        try container.encode(flickDodgeMilliseconds, forKey: .flickDodgeMilliseconds)
+        try container.encode(customCommand, forKey: .customCommand)
+    }
+
+    /// The Bunny Track preset: hide combat clutter, slow the look curve for
+    /// precise lines, and dodge with a look-side flick.
+    func applyingBunnyTrackPreset() -> UT99TouchConfiguration {
+        var result = self
+        result.hiddenActions = Self.bunnyTrackHiddenActions
+        result.lookAcceleration = 0.2
+        result.flickDodgeEnabled = true
+        return result.sanitized()
+    }
+}
+
+/// Look-side flick recognition. A flick dodges only if it is fast, mostly
+/// horizontal, and long enough; anything slower is ordinary looking.
+enum UT99FlickDodge {
+    static func direction(
+        for translation: CGPoint,
+        elapsedMilliseconds: Double,
+        distance: CGFloat,
+        windowMilliseconds: Double
+    ) -> UT99DodgeDirection? {
+        guard elapsedMilliseconds <= windowMilliseconds else { return nil }
+        let horizontal = abs(translation.x)
+        // A clearly sideways flick: at least twice as wide as it is tall, so
+        // diagonal aim corrections never dodge.
+        guard horizontal >= distance, horizontal >= abs(translation.y) * 2 else { return nil }
+        return translation.x < 0 ? .left : .right
+    }
+}
+
+/// Keys the WALK and CUSTOM buttons press, and the User.ini lines that bind
+/// them. The host rewrites only these two lines under [Engine.Input] at each
+/// engine start, so the buttons work whatever the player's other bindings.
+enum UT99TouchKeyBindings {
+    static let walkKeyName = "Home"
+    static let customKeyName = "Insert"
+    static let walkCommand = "Walking"
+    static let maximumCommandLength = 120
+
+    static func sanitizedCommand(_ command: String) -> String {
+        let singleLine = command
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        return String(singleLine.prefix(maximumCommandLength))
+    }
+
+    /// Return `ini` with `Home=Walking` and `Insert=<command>` set inside
+    /// [Engine.Input], adding the lines (or the section) when missing.
+    static func applying(to ini: String, customCommand: String) -> String {
+        let wanted: [(key: String, value: String)] = [
+            (walkKeyName, walkCommand),
+            (customKeyName, sanitizedCommand(customCommand)),
+        ]
+        var lines = ini.components(separatedBy: "\n")
+        let lineEnding = lines.first?.hasSuffix("\r") == true ? "\r" : ""
+        func bare(_ line: String) -> String { line.hasSuffix("\r") ? String(line.dropLast()) : line }
+
+        guard let header = lines.firstIndex(where: { bare($0).caseInsensitiveCompare("[Engine.Input]") == .orderedSame })
+        else {
+            if let last = lines.last, !bare(last).isEmpty { lines.append("") }
+            lines.append("[Engine.Input]" + lineEnding)
+            for binding in wanted { lines.append("\(binding.key)=\(binding.value)" + lineEnding) }
+            return lines.joined(separator: "\n")
+        }
+        var end = lines.count
+        for index in (header + 1)..<lines.count where bare(lines[index]).hasPrefix("[") {
+            end = index
+            break
+        }
+        var missing: [String] = []
+        for binding in wanted {
+            let prefix = binding.key.lowercased() + "="
+            let replacement = "\(binding.key)=\(binding.value)"
+            if let index = (header + 1..<end).first(where: { bare(lines[$0]).lowercased().hasPrefix(prefix) }) {
+                let ending = lines[index].hasSuffix("\r") ? "\r" : ""
+                lines[index] = replacement + ending
+            } else {
+                missing.append(replacement + lineEnding)
+            }
+        }
+        lines.insert(contentsOf: missing, at: header + 1)
+        return lines.joined(separator: "\n")
     }
 }
 

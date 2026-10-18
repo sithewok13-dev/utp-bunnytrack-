@@ -702,13 +702,17 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             }
             self.engineBridge.publishTouchAction(action, pressed: pressed)
         }
-        touchOverlay.onDodge = { [weak self] direction in
+        touchOverlay.onDodge = { [weak self] direction, undoLook in
             guard let self, !self.originalMenuInputActive else { return }
-            NSLog("UT99 touch dodge direction=%@", direction.rawValue)
+            NSLog("UT99 touch dodge direction=%@ undoLook=%@", direction.rawValue, undoLook ? "true" : "false")
+            if undoLook { self.engineBridge.undoTouchLookSinceMark() }
             self.engineBridge.publishTouchDodge(
                 direction,
                 stepMilliseconds: self.touchOverlay.touchConfiguration.dodgeStepMilliseconds
             )
+        }
+        touchOverlay.onLookBegan = { [weak self] in
+            self?.engineBridge.markTouchLookUndo()
         }
         touchOverlay.onMove = { [weak self] value, active in
             guard let self else { return }
@@ -3313,6 +3317,37 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         dodgeHaptics.accessibilityLabel = "Dodge haptic"
         dodgeHaptics.addTarget(self, action: #selector(touchDodgeHapticsChanged(_:)), for: .valueChanged)
 
+        let flickDodge = UISwitch()
+        flickDodge.isOn = dodgeConfiguration.flickDodgeEnabled
+        flickDodge.accessibilityLabel = "Flick on the look side to dodge"
+        flickDodge.addTarget(self, action: #selector(touchFlickDodgeChanged(_:)), for: .valueChanged)
+
+        let flickSensitivity = touchSettingsSegments(
+            Self.flickSensitivityOptions.map { $0.title },
+            selected: Self.nearestOptionIndex(
+                Self.flickSensitivityOptions.map { $0.distance }, to: dodgeConfiguration.flickDodgeDistance
+            )
+        )
+        flickSensitivity.accessibilityLabel = "Flick dodge sensitivity"
+        flickSensitivity.addTarget(self, action: #selector(touchFlickSensitivityChanged(_:)), for: .valueChanged)
+
+        let walkVisible = UISwitch()
+        walkVisible.isOn = touchOverlay.isActionVisible(.walk)
+        walkVisible.accessibilityLabel = "Show WALK button"
+        walkVisible.addTarget(self, action: #selector(touchWalkVisibleChanged(_:)), for: .valueChanged)
+
+        let customVisible = UISwitch()
+        customVisible.isOn = touchOverlay.isActionVisible(.customCommand)
+        customVisible.accessibilityLabel = "Show CUSTOM button"
+        customVisible.addTarget(self, action: #selector(touchCustomVisibleChanged(_:)), for: .valueChanged)
+
+        let bunnyTrack = touchSettingsButton("Apply BT Layout", symbol: "hare.fill", selector: #selector(applyBunnyTrackLayoutFromSettings))
+        let customCommand = touchSettingsButton(
+            "CUSTOM command: \(dodgeConfiguration.customCommand.isEmpty ? "none" : dodgeConfiguration.customCommand)",
+            symbol: "terminal",
+            selector: #selector(editCustomCommandFromSettings)
+        )
+
         let edit = touchSettingsButton("Arrange Controls", symbol: "move.3d", selector: #selector(editTouchLayoutFromSettings))
         let saved = touchSettingsButton("Saved Layouts", symbol: "square.and.arrow.down", selector: #selector(showNamedTouchProfilesFromSettings))
         let reset = touchSettingsButton("Restore Default Layout", symbol: "arrow.counterclockwise", selector: #selector(resetTouchLayoutFromSettings))
@@ -3324,7 +3359,14 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsRow(title: "Look acceleration", control: lookAcceleration),
             touchSettingsRow(title: "Move sensitivity", control: moveSensitivity),
             touchSettingsRow(title: "Invert vertical look", control: invertLook),
+            touchSettingsSection("BUNNY TRACK"),
+            bunnyTrack,
+            touchSettingsRow(title: "WALK button", control: walkVisible),
+            touchSettingsRow(title: "CUSTOM button", control: customVisible),
+            customCommand,
             touchSettingsSection("DODGE"),
+            touchSettingsRow(title: "Flick look side to dodge", control: flickDodge),
+            touchSettingsRow(title: "Flick sensitivity", control: flickSensitivity),
             touchSettingsRow(title: "DODGE swipe pad", control: dodgeVisible),
             touchSettingsRow(title: "Swipe distance", control: dodgeDistance),
             touchSettingsRow(title: "Tap spacing", control: dodgeSpacing),
@@ -3491,6 +3533,68 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     /// Raise the spacing if dodges are missed at low frame rates; each tap
     /// edge must outlast one engine frame.
     private static let dodgeStepOptions = [35, 50, 70]
+
+    /// Easy fires on a shorter, slower flick; Strict needs a longer, faster
+    /// one and so leaves quick horizontal aim alone more often.
+    private static let flickSensitivityOptions: [(title: String, distance: Double, milliseconds: Int)] = [
+        ("Easy", 30, 180), ("Normal", 40, 150), ("Strict", 55, 120),
+    ]
+
+    @objc private func touchFlickDodgeChanged(_ sender: UISwitch) {
+        var configuration = touchOverlay.touchConfiguration
+        configuration.flickDodgeEnabled = sender.isOn
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchFlickSensitivityChanged(_ sender: UISegmentedControl) {
+        guard Self.flickSensitivityOptions.indices.contains(sender.selectedSegmentIndex) else { return }
+        let option = Self.flickSensitivityOptions[sender.selectedSegmentIndex]
+        var configuration = touchOverlay.touchConfiguration
+        configuration.flickDodgeDistance = option.distance
+        configuration.flickDodgeMilliseconds = option.milliseconds
+        touchOverlay.setTouchConfiguration(configuration)
+    }
+
+    @objc private func touchWalkVisibleChanged(_ sender: UISwitch) {
+        touchOverlay.setAction(.walk, visible: sender.isOn)
+    }
+
+    @objc private func touchCustomVisibleChanged(_ sender: UISwitch) {
+        touchOverlay.setAction(.customCommand, visible: sender.isOn)
+    }
+
+    @objc private func applyBunnyTrackLayoutFromSettings() {
+        touchOverlay.applyBunnyTrackLayout()
+        statusLabel.text = "Bunny Track layout applied"
+        refreshHostMenu()
+        // Rebuild the panel so every switch reflects the preset.
+        showTouchSettings()
+    }
+
+    @objc private func editCustomCommandFromSettings() {
+        let alert = UIAlertController(
+            title: "CUSTOM command",
+            message: "The UT console command the CUSTOM button runs, for example suicide. It takes effect the next time the game starts.",
+            preferredStyle: .alert
+        )
+        alert.addTextField { [weak self] field in
+            field.text = self?.touchOverlay.touchConfiguration.customCommand
+            field.placeholder = UT99TouchConfiguration.defaultCustomCommand
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.spellCheckingType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            var configuration = self.touchOverlay.touchConfiguration
+            configuration.customCommand = alert?.textFields?.first?.text ?? ""
+            self.touchOverlay.setTouchConfiguration(configuration)
+            self.statusLabel.text = "CUSTOM command saved; restart the game to apply"
+            self.showTouchSettings()
+        })
+        present(alert, animated: true)
+    }
 
     @objc private func touchDodgeVisibleChanged(_ sender: UISwitch) {
         touchOverlay.setAction(.dodge, visible: sender.isOn)
