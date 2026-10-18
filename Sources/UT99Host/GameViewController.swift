@@ -58,7 +58,8 @@ private final class UT99GameSurfaceInputView: UIView {
     /// open: only when menus are (re)entered or after a long idle.
     var menuPointerNeedsAnchor = true
     private var lastMenuTouchEnd: CFTimeInterval = 0
-    static let menuAnchorIdleSeconds: CFTimeInterval = 20    private weak var trackedTouch: UITouch?
+    static let menuAnchorIdleSeconds: CFTimeInterval = 20
+    private weak var trackedTouch: UITouch?
     /// The finger currently driving UT's menus directly: tap clicks, drag
     /// holds the left button (scrollbars, sliders), long press right-clicks.
     private weak var menuTouch: UITouch?
