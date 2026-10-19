@@ -425,6 +425,9 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     fileprivate var lastEngineLogScan: CFTimeInterval = 0
     fileprivate var lastViewportGameplayCapture: Bool?
     fileprivate var engineLogOffsets: [String: UInt64] = [:]
+    /// A playable map is loaded (from UT's log), so Escape from UT's menu
+    /// returns to the match.
+    fileprivate var engineInPlayableMap = false
     fileprivate var lastJoinedServer: (address: String, at: CFTimeInterval)?
     private var menuKeyboardLetterButtons: [UIButton] = []
     private var menuKeyboardShifted = false
@@ -879,6 +882,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
                 return
             }
             self.engineBridge.publishTouchAction(action, pressed: pressed)
+            if action == .pause && !pressed { self.followMenuButtonTap() }
         }
         touchOverlay.onDodge = { [weak self] direction, undoLook in
             guard let self, !self.originalMenuInputActive else { return }
@@ -5740,6 +5744,7 @@ extension GameViewController: UITextFieldDelegate {
                 lastJoinedServer = nil
             }
             NSLog("UT99 engine log map=%@", map)
+            engineInPlayableMap = true
             // Loading a playable map closes UT's menus, so play starts with
             // game controls whether or not the viewport flag flips.
             if touchOverlay.touchConfiguration.autoMenuSwitch, originalMenuInputActive,
@@ -5754,7 +5759,35 @@ extension GameViewController: UITextFieldDelegate {
                 switchTouchProfile(to: target)
                 showHostToast("\(target) controls")
             }
+        case .titleMap:
+            // Disconnected or back at the title: UT's menu is up.
+            engineInPlayableMap = false
+            NSLog("UT99 engine log title map")
+            if touchOverlay.touchConfiguration.autoMenuSwitch, !originalMenuInputActive,
+               !touchOverlay.editingLayout, hostState == .running {
+                setOriginalMenuInputActive(true)
+                refreshHostMenu()
+            }
         }
+    }
+
+    /// MENU is Escape, which opens UT's menu during a match and closes it
+    /// again. The engine gives no reliable signal for that, so the tap itself
+    /// moves the host between game controls and menu touch. At the title
+    /// there is no match to return to, and the host stays in menu touch.
+    private func followMenuButtonTap() {
+        guard touchOverlay.touchConfiguration.autoMenuSwitch, hostState == .running,
+              !touchOverlay.editingLayout else { return }
+        if !originalMenuInputActive {
+            setOriginalMenuInputActive(true)
+        } else if engineInPlayableMap {
+            setOriginalMenuInputActive(false)
+            prepareResponderFallbackGameplay()
+        } else {
+            return
+        }
+        refreshHostMenu()
+        NSLog("UT99 MENU tap mode=%@", originalMenuInputActive ? "menu" : "gameplay")
     }
 
     // MARK: Profiles

@@ -495,6 +495,8 @@ enum UT99TouchProfileName {
 enum UT99EngineLogEvent: Equatable {
     case map(String)
     case server(String)
+    /// A title or transition map: no match is running and UT's menu is up.
+    case titleMap
 }
 
 enum UT99EngineLogWatch {
@@ -518,8 +520,9 @@ enum UT99EngineLogWatch {
         if isServerAddress(token) { return .server(token) }
         var map = token
         if map.lowercased().hasSuffix(".unr") { map = String(map.dropLast(4)) }
-        guard !map.isEmpty, !neutralMaps.contains(map.lowercased()),
-              map.allSatisfy({ $0.isLetter || $0.isNumber || "-_[]().".contains($0) }) else { return nil }
+        guard !map.isEmpty else { return nil }
+        if neutralMaps.contains(map.lowercased()) { return .titleMap }
+        guard map.allSatisfy({ $0.isLetter || $0.isNumber || "-_[]().".contains($0) }) else { return nil }
         return .map(map)
     }
 

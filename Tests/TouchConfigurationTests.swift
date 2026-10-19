@@ -264,8 +264,8 @@ private enum TouchConfigurationTests {
                 "network client map load not parsed")
         require(event("LoadMap: unreal://bt.example.net:7777/CTF-BT-x.unr?Name=P") == .map("CTF-BT-x"),
                 "network client map load by host name not parsed")
-        require(event("Log: LoadMap: Entry") == nil && event("Log: Browse: UT-Logo-Map.unr") == nil,
-                "title maps must not switch profiles")
+        require(event("Log: LoadMap: Entry") == .titleMap && event("Log: Browse: UT-Logo-Map.unr") == .titleMap,
+                "title maps must be reported as title maps, not as a map to play")
         require(event("UT99 engine log map=CTF-BT-Andacs LoadMap: CTF-BT-Andacs") == nil,
                 "the host's own log lines must be ignored")
         require(event("Log: Spawning game: Botpack.CTFGame") == nil, "unrelated line produced an event")
