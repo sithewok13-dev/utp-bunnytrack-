@@ -70,6 +70,8 @@ final class UT99EngineBridge {
     private var menuCursorTimer: DispatchSourceTimer?
     private var menuCursorPosition = CGPoint.zero
     private var menuCursorCanvasSize = CGSize.zero
+    private let pointerScaleLock = NSLock()
+    private var sdlPointerScale: CGFloat = 1
     init() {
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
@@ -766,6 +768,18 @@ final class UT99EngineBridge {
         }
     }
 
+    /// SDLDrv multiplies every SDL mouse delta by its "Mouse Scale" (window
+    /// pixels per point: 3 on current iPhones, 2 on iPad) while UWindow lays
+    /// out in points. Unscaled points therefore land 3x too far from the
+    /// corner on iPhone. Sending points divided by that scale lands the
+    /// cursor on the touched point.
+    func updatePointerScale(_ scale: CGFloat) {
+        guard scale.isFinite, scale >= 1 else { return }
+        pointerScaleLock.lock()
+        sdlPointerScale = scale
+        pointerScaleLock.unlock()
+    }
+
     func updateMenuCursorCanvasSize(_ canvasSize: CGSize) {
         guard canvasSize.width > 0, canvasSize.height > 0 else { return }
         menuCursorQueue.async { [weak self] in
@@ -946,8 +960,11 @@ final class UT99EngineBridge {
     /// both 1366x1024 on the physical iPad; drawable and GUI scale must not
     /// shrink the cursor's reachable range.
     func publishGameSurfacePointer(location: CGPoint, pressed: Bool?, anchor: Bool = false) {
-        let enginePoint = location
-        let x = Int32(max(0, min(CGFloat(Int32.max), enginePoint.x)).rounded())
+        pointerScaleLock.lock()
+        let pointerScale = sdlPointerScale
+        pointerScaleLock.unlock()
+        let enginePoint = CGPoint(x: location.x / pointerScale, y: location.y / pointerScale)
+        let x =Int32(max(0, min(CGFloat(Int32.max), enginePoint.x)).rounded())
         let y = Int32(max(0, min(CGFloat(Int32.max), enginePoint.y)).rounded())
         let (window, windowID) = focusedSDLWindow()
         if let handle,

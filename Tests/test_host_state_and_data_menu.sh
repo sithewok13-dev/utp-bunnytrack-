@@ -256,7 +256,8 @@ rg -Fq 'dirty_ref' tools/prepare_sdl2_source.sh
 rg -Fq 'patch -s -d "$staging/source" -p1' tools/prepare_sdl2_source.sh
 rg -Fq 'let pointerScale = 1.0' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'normalizedLines.append(pointerScaleLine)' Sources/UT99Host/UT99EngineBridge.swift
-rg -Fq 'let enginePoint = location' Sources/UT99Host/UT99EngineBridge.swift
+rg -Fq 'let enginePoint = CGPoint(x: location.x / pointerScale, y: location.y / pointerScale)' Sources/UT99Host/UT99EngineBridge.swift
+rg -Fq 'engineBridge.updatePointerScale(engineView.layer.contentsScale)' Sources/UT99Host/GameViewController.swift
 rg -Fq 'func publishMenuCursor(_ value: CGPoint, active: Bool)' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'self.engineBridge.publishMenuCursor(value, active: active)' Sources/UT99Host/GameViewController.swift
 rg -Fq 'self.engineBridge.publishMenuCursorClick(pressed: pressed)' Sources/UT99Host/GameViewController.swift

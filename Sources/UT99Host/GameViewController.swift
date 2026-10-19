@@ -4886,6 +4886,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             engineView.setNeedsLayout()
             engineView.layoutIfNeeded()
             engineBridge.updateMenuCursorCanvasSize(rendererFrame.size)
+            engineBridge.updatePointerScale(engineView.layer.contentsScale)
             NSLog("UT99EngineBridge renderer frame=%@ bounds=%@ scale=%.2f",
                   engineView.frame.debugDescription,
                   engineView.bounds.debugDescription,
