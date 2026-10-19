@@ -59,7 +59,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
         dodgeSideOnly: Bool = false,
         dodgeHaptics: Bool = true,
         dodgeStepMilliseconds: Int = 50,
-        flickDodgeEnabled: Bool = true,
+        flickDodgeEnabled: Bool = false,
         flickDodgeDistance: Double = 40,
         flickDodgeMilliseconds: Int = 150,
         customCommand: String = UT99TouchConfiguration.defaultCustomCommand,

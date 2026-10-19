@@ -5572,7 +5572,16 @@ extension GameViewController: UITextFieldDelegate {
     }
 
     func configureTouchFirstChrome() {
-        restoreBunnyTrackFireIfNeeded()
+        // Bunny Track controls are the default: start there once, then stay
+        // on whatever profile the player picks.
+        let btDefaultKey = "ut99.touch.migration.bunnyTrackDefault.v1"
+        if !UserDefaults.standard.bool(forKey: btDefaultKey) {
+            UserDefaults.standard.set(true, forKey: btDefaultKey)
+            if activeTouchProfileName != UT99TouchProfileName.bunnyTrack {
+                switchTouchProfile(to: UT99TouchProfileName.bunnyTrack)
+            }
+        }
+        applyOneTimeProfileMigrations()
         touchOverlay.onMenuHold = { [weak self] in
             self?.showOptionsTray()
         }
@@ -5758,8 +5767,10 @@ extension GameViewController: UITextFieldDelegate {
                 refreshHostMenu()
             }
             guard touchOverlay.touchConfiguration.autoProfileByMap else { return }
+            // Bunny Track is the default; a BT map brings it back if the
+            // player had picked another profile, and nothing switches away.
             let target = UT99TouchProfileName.forMap(map)
-            if target != activeTouchProfileName {
+            if target == UT99TouchProfileName.bunnyTrack, target != activeTouchProfileName {
                 switchTouchProfile(to: target)
                 showHostToast("\(target) controls")
             }
@@ -5817,7 +5828,7 @@ extension GameViewController: UITextFieldDelegate {
             touchOverlay.resetTouchLayout()
         }
         UserDefaults.standard.set(name, forKey: Self.activeTouchProfileKey)
-        restoreBunnyTrackFireIfNeeded()
+        applyOneTimeProfileMigrations()
         if let saved = try? touchOverlay.makeTouchProfile(named: name) {
             _ = try? UT99TouchProfileStore.upsert(saved)
         }
@@ -5825,14 +5836,30 @@ extension GameViewController: UITextFieldDelegate {
         NSLog("UT99 touch profile active=%@", name)
     }
 
-    /// Bunny Track profiles saved before the dodge buttons used FIRE as a
-    /// right dodge and a look-side flick. Move them once to ◀ DODGE (ALT),
-    /// DODGE ▶ and a shooting FIRE; the player can change any of it again.
-    private func restoreBunnyTrackFireIfNeeded() {
+    /// One-time changes to saved profiles, each applied the first time that
+    /// profile is active; the player can change any of it again afterwards.
+    private func applyOneTimeProfileMigrations() {
+        let defaults = UserDefaults.standard
+        // The look-side flick caught ordinary quick look swipes as dodges and
+        // then ignored the rest of that touch, so the camera seemed dead.
+        let noFlickKey = "ut99.touch.migration.noFlick.v1.\(activeTouchProfileName)"
+        if !defaults.bool(forKey: noFlickKey) {
+            defaults.set(true, forKey: noFlickKey)
+            var configuration = touchOverlay.touchConfiguration
+            if configuration.flickDodgeEnabled {
+                configuration.flickDodgeEnabled = false
+                touchOverlay.setTouchConfiguration(configuration)
+                if let saved = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+                    _ = try? UT99TouchProfileStore.upsert(saved)
+                }
+            }
+        }
+        // Bunny Track profiles saved before the dodge buttons used FIRE as a
+        // right dodge. Move them to ◀ DODGE (ALT), DODGE ▶ and a shooting FIRE.
         let key = "ut99.touch.migration.bunnyTrackDodgeButtons.v1"
         guard activeTouchProfileName == UT99TouchProfileName.bunnyTrack,
-              !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
+              !defaults.bool(forKey: key) else { return }
+        defaults.set(true, forKey: key)
         var configuration = touchOverlay.touchConfiguration
         configuration.flickDodgeEnabled = false
         configuration.fireButtonsDodge = true

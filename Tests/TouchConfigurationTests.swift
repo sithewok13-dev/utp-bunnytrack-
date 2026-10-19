@@ -96,7 +96,7 @@ private enum TouchConfigurationTests {
         require(migrated.dodgeSwipeDistance == 18 && !migrated.dodgeSideOnly &&
                 migrated.dodgeHaptics && migrated.dodgeStepMilliseconds == 50,
                 "legacy configuration did not take standard dodge settings")
-        require(migrated.flickDodgeEnabled && migrated.flickDodgeDistance == 40 &&
+        require(!migrated.flickDodgeEnabled && migrated.flickDodgeDistance == 40 &&
                 migrated.flickDodgeMilliseconds == 150 && migrated.customCommand == "suicide",
                 "legacy configuration did not take standard flick and CUSTOM settings")
         require(UT99TouchConfiguration.standard.hiddenActions.isSuperset(of: ["dodge", "walk", "customCommand"]),

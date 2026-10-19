@@ -151,11 +151,10 @@ The touch interface is designed as a full-bleed landscape overlay:
 - **Left thumb:** movement stick plus SCORE, USE, PREV, and NEXT utility
   directions.
 - **Right thumb:** look/aim stick, a large JUMP, FIRE above it, ALT, and DUCK
-  in the lower-right corner. A fast sideways flick anywhere on the look side
-  (outside the buttons) is a side dodge: UTP sends UT's normal double-tap on
-  the matching movement key, so it behaves exactly like keyboard dodging,
-  including on servers, and hands back the small turn the flick began. A
-  separate DODGE swipe pad is available in Controls & Display.
+  in the lower-right corner. Dodges send UT's normal double-tap on the
+  matching movement key, so they behave exactly like keyboard dodging,
+  including on servers. An optional look-side flick dodge and a DODGE swipe
+  pad are available in Controls & Display.
 - **Bunny Track:** Controls & Display → Apply BT Layout hides combat and
   inventory buttons, turns ALT into a one-tap ◀ DODGE and the DODGE button
   (above FIRE) into a one-tap DODGE ▶, keeps FIRE shooting (to join and to
@@ -169,8 +168,9 @@ The touch interface is designed as a full-bleed landscape overlay:
   MENU/PLAY, layout, settings, more); `•••` stays available. UT menus are
   tapped directly: drag up or down to scroll a list, long-press to
   right-click, e.g. to refresh or ping the server list.
-- **Profiles:** Standard and Bunny Track keep separate layouts and settings;
-  UTP switches to Bunny Track on `CTF-BT-` maps and back elsewhere.
+- **Profiles:** Standard and Bunny Track keep separate layouts and settings.
+  Bunny Track is the default; if another profile is picked, UTP switches back
+  to Bunny Track on `CTF-BT-` maps.
 - **Customization:** opacity, scale, handedness, visibility, drag/pinch layout
   editing, saved profiles, and restore defaults.
 
