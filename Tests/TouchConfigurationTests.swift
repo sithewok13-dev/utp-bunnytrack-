@@ -260,6 +260,10 @@ private enum TouchConfigurationTests {
         require(event("Browse: 203.0.113.7:7777/?Name=Player") == .server("203.0.113.7:7777"), "server join not parsed")
         require(event("Log: Browse: unreal://203.0.113.7:7778/CTF-BT-x?Name=P") == .server("203.0.113.7:7778"),
                 "unreal:// server join not parsed")
+        require(event("Log: LoadMap: 203.0.113.7:7777/CTF-BT-Andacs?Name=P?Class=Botpack.TMale1") == .map("CTF-BT-Andacs"),
+                "network client map load not parsed")
+        require(event("LoadMap: unreal://bt.example.net:7777/CTF-BT-x.unr?Name=P") == .map("CTF-BT-x"),
+                "network client map load by host name not parsed")
         require(event("Log: LoadMap: Entry") == nil && event("Log: Browse: UT-Logo-Map.unr") == nil,
                 "title maps must not switch profiles")
         require(event("UT99 engine log map=CTF-BT-Andacs LoadMap: CTF-BT-Andacs") == nil,

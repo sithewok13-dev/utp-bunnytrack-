@@ -507,6 +507,12 @@ enum UT99EngineLogWatch {
         guard let marker = ["LoadMap:", "Browse:"].lazy.compactMap({ line.range(of: $0) }).first else { return nil }
         var rest = line[marker.upperBound...].drop(while: { $0 == " " || $0 == "\t" })
         if rest.lowercased().hasPrefix("unreal://") { rest = rest.dropFirst("unreal://".count) }
+        // A network client loads "host:port/Map?options": the map is what
+        // matters there, the join itself was already logged by Browse.
+        if line[marker].hasPrefix("LoadMap") {
+            let address = rest.prefix(while: { $0 != "?" && $0 != "#" })
+            if let slash = address.lastIndex(of: "/") { rest = rest[rest.index(after: slash)...] }
+        }
         let token = String(rest.prefix(while: { !$0.isWhitespace && $0 != "?" && $0 != "/" && $0 != "#" }))
         guard !token.isEmpty else { return nil }
         if isServerAddress(token) { return .server(token) }

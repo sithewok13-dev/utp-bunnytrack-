@@ -52,6 +52,9 @@ private final class UT99GameSurfaceInputView: UIView {
     var fingerMenuEnabled = false
     /// A finger tap clicks here (move, press, spaced release).
     var onMenuClick: ((CGPoint) -> Void)?
+    /// A vertical finger drag scrolls the UT list under it: mouse-wheel
+    /// notches, positive up, like a scroll wheel.
+    var onMenuScroll: ((Int32) -> Void)?
     /// Debug: where a menu finger landed and what the host sent for it.
     var onMenuTouchMarker: ((CGPoint, String) -> Void)?
     private weak var trackedTouch: UITouch?
@@ -61,11 +64,15 @@ private final class UT99GameSurfaceInputView: UIView {
     private var menuTouchStart = CGPoint.zero
     private var menuTouchStartTime: CFTimeInterval = 0
     private var menuTouchDragging = false
+    private var menuTouchScrolling = false
+    private var menuScrollRemainder: CGFloat = 0
     private var menuTouchLongPressed = false
     private var menuLongPressLink: CADisplayLink?
     private let menuHaptic = UIImpactFeedbackGenerator(style: .medium)
     static let menuLongPressSeconds: CFTimeInterval = 0.5
     static let menuDragThreshold: CGFloat = 20
+    /// Finger travel per mouse-wheel notch while scrolling a UT list.
+    static let menuScrollPointsPerNotch: CGFloat = 10
     private var lastLookLocation: CGPoint?
     private var lastHoverLocation: CGPoint?
     private(set) var inputMode: InputMode = .originalMenu
@@ -169,6 +176,8 @@ private final class UT99GameSurfaceInputView: UIView {
         menuTouchStart = location
         menuTouchStartTime = CACurrentMediaTime()
         menuTouchDragging = false
+        menuTouchScrolling = false
+        menuScrollRemainder = 0
         menuTouchLongPressed = false
         // Put UWindow's cursor under the finger first so the item highlights
         // before any click, as a mouse hover would. UWindow's cursor is
@@ -204,22 +213,53 @@ private final class UT99GameSurfaceInputView: UIView {
     private func moveMenuTouch(_ touch: UITouch) {
         guard !menuTouchLongPressed else { return }
         let location = touch.location(in: self)
+        if menuTouchScrolling {
+            scrollMenu(to: location)
+            return
+        }
         if !menuTouchDragging {
-            guard hypot(location.x - menuTouchStart.x, location.y - menuTouchStart.y) >= Self.menuDragThreshold else { return }
-            // A drag grabs whatever is under the starting point, like a mouse
-            // press-and-drag on a scrollbar.
-            menuTouchDragging = true
+            let dx = location.x - menuTouchStart.x
+            let dy = location.y - menuTouchStart.y
+            guard hypot(dx, dy) >= Self.menuDragThreshold else { return }
             stopMenuLongPressTimer()
+            if abs(dy) >= abs(dx) {
+                // Up/down scrolls the list under the finger, as on a phone.
+                // UWindow lists only scroll from their scrollbar or the wheel;
+                // holding the button would just select rows.
+                menuTouchScrolling = true
+                menuScrollRemainder = 0
+                lastMenuScrollLocation = menuTouchStart
+                onMenuTouchMarker?(menuTouchStart, "SCROLL")
+                scrollMenu(to: location)
+                return
+            }
+            // Sideways grabs whatever is under the starting point, like a
+            // mouse press-and-drag on a slider.
+            menuTouchDragging = true
             onPointer?(menuTouchStart, true, false)
             onMenuTouchMarker?(menuTouchStart, "DRAG")
         }
         onPointer?(location, nil, false)
     }
 
+    private var lastMenuScrollLocation = CGPoint.zero
+
+    private func scrollMenu(to location: CGPoint) {
+        menuScrollRemainder += location.y - lastMenuScrollLocation.y
+        lastMenuScrollLocation = location
+        let notches = Int32((menuScrollRemainder / Self.menuScrollPointsPerNotch).rounded(.towardZero))
+        guard notches != 0 else { return }
+        menuScrollRemainder -= CGFloat(notches) * Self.menuScrollPointsPerNotch
+        // Finger down reveals earlier rows: wheel up.
+        onMenuScroll?(notches)
+    }
+
     private func endMenuTouch(_ touch: UITouch, cancelled: Bool) {
         let location = touch.location(in: self)
         stopMenuLongPressTimer()
-        if menuTouchDragging {
+        if menuTouchScrolling {
+            onMenuTouchMarker?(location, "SCROLL END")
+        } else if menuTouchDragging {
             onPointer?(location, false, false)
             onMenuTouchMarker?(location, "DRAG END")
         } else if !menuTouchLongPressed && !cancelled {
@@ -232,6 +272,7 @@ private final class UT99GameSurfaceInputView: UIView {
         }
         menuTouch = nil
         menuTouchDragging = false
+        menuTouchScrolling = false
         menuTouchLongPressed = false
     }
 
@@ -284,6 +325,7 @@ private final class UT99GameSurfaceInputView: UIView {
             if menuTouchDragging { onPointer?(menuTouchStart, false, false) }
             menuTouch = nil
             menuTouchDragging = false
+            menuTouchScrolling = false
             menuTouchLongPressed = false
         }
         guard trackedTouch != nil else { return }
@@ -792,6 +834,11 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         gameSurfaceInputView.onMenuClick = { [weak self] location in
             guard let self else { return }
             self.engineBridge.publishExternalMenuClick(location: self.rendererPoint(fromHostPoint: location))
+        }
+        gameSurfaceInputView.onMenuScroll = { [weak self] notches in
+            for _ in 0..<abs(notches) {
+                self?.engineBridge.publishHardwareMouseWheel(y: notches > 0 ? 1 : -1)
+            }
         }
         gameSurfaceInputView.onMenuTouchMarker = { [weak self] location, label in
             self?.showTouchMarker(at: location, label: label)
@@ -5602,16 +5649,16 @@ extension GameViewController: UITextFieldDelegate {
               }.joined(separator: " "))
     }
 
-    /// Show the three-dot button whenever MENU is not on screen and always in
-    /// UT's menus (a sure route to the host panel and Export Logs), and the
-    /// keyboard chip only in UT's menus.
+    /// Always show the three-dot button (a sure route to the host panel and
+    /// Export Logs), and the keyboard chip only in UT's menus.
     private func updateTouchFirstChrome() {
         // Change views only when their state really changes: every host
         // layout pass re-runs the SDL window attachment, so touching the view
         // tree on each tick would stall the engine several times a second.
         let touchMenuVisible = isEngineActive && !touchOverlay.isHidden
-        let hideMenuButton = touchMenuVisible && hostMenuPanel == nil && !originalMenuInputActive
-        if menuButton.isHidden != hideMenuButton { menuButton.isHidden = hideMenuButton }
+        // The three-dot button stays in every mode: hiding it in play left
+        // players with no visible way back to the options.
+        if menuButton.isHidden { menuButton.isHidden = false }
         let hideChip = !(isEngineActive && originalMenuInputActive && menuKeyboardPanel == nil &&
             consoleBar == nil && optionsTray == nil && hostMenuPanel == nil)
         if menuKeyboardChip.isHidden != hideChip {
@@ -5693,6 +5740,14 @@ extension GameViewController: UITextFieldDelegate {
                 lastJoinedServer = nil
             }
             NSLog("UT99 engine log map=%@", map)
+            // Loading a playable map closes UT's menus, so play starts with
+            // game controls whether or not the viewport flag flips.
+            if touchOverlay.touchConfiguration.autoMenuSwitch, originalMenuInputActive,
+               !touchOverlay.editingLayout, hostState == .running {
+                setOriginalMenuInputActive(false)
+                prepareResponderFallbackGameplay()
+                refreshHostMenu()
+            }
             guard touchOverlay.touchConfiguration.autoProfileByMap else { return }
             let target = UT99TouchProfileName.forMap(map)
             if target != activeTouchProfileName {
