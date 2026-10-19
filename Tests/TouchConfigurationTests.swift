@@ -252,6 +252,20 @@ private enum TouchConfigurationTests {
         require(UT99TouchProfileName.forMap("CTF-Face") == UT99TouchProfileName.standard, "CTF map treated as BT")
         require(UT99TouchProfileName.forMap("DM-Deck16][") == UT99TouchProfileName.standard, "DM map treated as BT")
 
+        // Movement stick: a slightly off-center forward push runs straight;
+        // only a clearly diagonal push holds two keys.
+        func move(_ degrees: Double) -> Set<UT99DodgeDirection> {
+            let radians = degrees * .pi / 180
+            return UT99TouchMovement.directions(for: CGPoint(x: sin(radians), y: cos(radians)), deadZone: 0.04)
+        }
+        require(move(0) == [.forward] && move(20) == [.forward] && move(-25) == [.forward],
+                "near-forward push strafed")
+        require(move(45) == [.forward, .right] && move(-45) == [.forward, .left], "diagonal lost")
+        require(move(90) == [.right] && move(75) == [.right] && move(-100) == [.left], "strafe not snapped")
+        require(move(180) == [.back] && move(160) == [.back] && move(135) == [.back, .right], "back not snapped")
+        require(UT99TouchMovement.directions(for: CGPoint(x: 0.02, y: 0.03), deadZone: 0.04).isEmpty,
+                "dead zone ignored")
+
         // UT log lines.
         typealias Event = UT99EngineLogEvent
         func event(_ line: String) -> Event? { UT99EngineLogWatch.event(in: line) }

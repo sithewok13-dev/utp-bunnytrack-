@@ -523,18 +523,33 @@ final class UT99EngineBridge {
         }
     }
 
+    /// Stick and look publish up to 60 times a second; decoding (and
+    /// re-saving) the configuration on each call is wasted main-thread work.
+    /// Settings changes reach the bridge within half a second.
+    private let touchConfigurationCacheLock = NSLock()
+    private var touchConfigurationCache: (configuration: UT99TouchConfiguration, at: CFTimeInterval)?
+
+    private func cachedTouchConfiguration() -> UT99TouchConfiguration {
+        let now = CACurrentMediaTime()
+        touchConfigurationCacheLock.lock()
+        defer { touchConfigurationCacheLock.unlock() }
+        if let cache = touchConfigurationCache, now - cache.at < 0.5 { return cache.configuration }
+        let configuration = UT99TouchConfiguration.load()
+        touchConfigurationCache = (configuration, now)
+        return configuration
+    }
+
     func publishTouchMove(_ value: CGPoint, active: Bool) {
         // The verified v469e User.ini binds movement to the arrow keys. Its
         // W/A/D entries are empty and S is an axis command, so a WASD bridge
         // cannot move this player. Keep the analog gesture as directional
         // arrow-key holds and release every edge explicitly.
-        let deadZone = CGFloat(UT99TouchConfiguration.load().movementDeadZone)
+        let deadZone = CGFloat(cachedTouchConfiguration().movementDeadZone)
         var desired = Set<Int32>()
         if active {
-            if value.y > deadZone { desired.insert(Self.movementKey(for: .forward)) }
-            if value.y < -deadZone { desired.insert(Self.movementKey(for: .back)) }
-            if value.x < -deadZone { desired.insert(Self.movementKey(for: .left)) }
-            if value.x > deadZone { desired.insert(Self.movementKey(for: .right)) }
+            for direction in UT99TouchMovement.directions(for: value, deadZone: deadZone) {
+                desired.insert(Self.movementKey(for: direction))
+            }
         }
         movementKeyLock.lock()
         defer { movementKeyLock.unlock() }
@@ -650,7 +665,7 @@ final class UT99EngineBridge {
         let tuned = UT99TouchInputTuning.transformedLook(
             value,
             sensitivity: sensitivity,
-            configuration: UT99TouchConfiguration.load(),
+            configuration: cachedTouchConfiguration(),
             invertY: invertY
         )
         let xrel = Int32((tuned.x * 2_700).rounded())

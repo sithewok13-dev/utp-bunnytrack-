@@ -320,6 +320,30 @@ enum UT99TouchKeyBindings {
 
 /// A dodge relative to the player's view, matching UT's double-tap
 /// directions on MoveForward, MoveBackward, StrafeLeft and StrafeRight.
+/// The movement stick drives UT's digital movement keys, so any sideways
+/// component past the dead zone strafes at full speed and turns a slightly
+/// off-center thumb into a 45° diagonal. Snap to the nearest straight
+/// direction within `snapDegrees` of it; only a clearly diagonal push holds
+/// two keys.
+enum UT99TouchMovement {
+    static let snapDegrees: Double = 30
+
+    /// `value.y` is forward-positive, `value.x` right-positive.
+    static func directions(for value: CGPoint, deadZone: CGFloat,
+                           snapDegrees: Double = snapDegrees) -> Set<UT99DodgeDirection> {
+        guard hypot(value.x, value.y) > deadZone else { return [] }
+        // 0° is straight ahead, 90° straight right, ±180° straight back.
+        let angle = atan2(Double(value.x), Double(value.y)) * 180 / .pi
+        let snap = min(max(snapDegrees, 0), 44)
+        var result = Set<UT99DodgeDirection>()
+        if abs(angle) < 90 - snap { result.insert(.forward) }
+        if abs(angle) > 90 + snap { result.insert(.back) }
+        if angle > snap && angle < 180 - snap { result.insert(.right) }
+        if angle < -snap && angle > -(180 - snap) { result.insert(.left) }
+        return result
+    }
+}
+
 enum UT99DodgeDirection: String, CaseIterable {
     case left, right, forward, back
 
