@@ -190,7 +190,7 @@ private enum TouchConfigurationTests {
         require(preset.hiddenActions == UT99TouchConfiguration.bunnyTrackHiddenActions, "BT preset hidden set changed")
         require(!preset.hiddenActions.contains("walk") && !preset.hiddenActions.contains("customCommand") &&
                 !preset.hiddenActions.contains("jump") && !preset.hiddenActions.contains("crouch") &&
-                !preset.hiddenActions.contains("primaryFire"),
+                !preset.hiddenActions.contains("primaryFire") && !preset.hiddenActions.contains("leftPrimaryFire"),
                 "BT preset hid a control a trick-jump run needs")
         require(preset.flickDodgeEnabled && preset.lookAcceleration == 0.2, "BT preset look tuning changed")
         require(preset.fireButtonsDodge && !preset.hiddenActions.contains("alternateFire"),

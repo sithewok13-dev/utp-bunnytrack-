@@ -5569,6 +5569,7 @@ extension GameViewController: UITextFieldDelegate {
     }
 
     func configureTouchFirstChrome() {
+        restoreBunnyTrackFireIfNeeded()
         touchOverlay.onMenuHold = { [weak self] in
             self?.showOptionsTray()
         }
@@ -5813,11 +5814,26 @@ extension GameViewController: UITextFieldDelegate {
             touchOverlay.resetTouchLayout()
         }
         UserDefaults.standard.set(name, forKey: Self.activeTouchProfileKey)
+        restoreBunnyTrackFireIfNeeded()
         if let saved = try? touchOverlay.makeTouchProfile(named: name) {
             _ = try? UT99TouchProfileStore.upsert(saved)
         }
         updateTouchVisibility()
         NSLog("UT99 touch profile active=%@", name)
+    }
+
+    /// The first BT preset hid the left-thumb FIRE, but FIRE joins the game
+    /// and shoots BT targets (ALT/FIRE on the right dodge). Show it once in a
+    /// Bunny Track profile saved before that; the player can hide it again.
+    private func restoreBunnyTrackFireIfNeeded() {
+        let key = "ut99.touch.migration.bunnyTrackFire.v1"
+        guard activeTouchProfileName == UT99TouchProfileName.bunnyTrack,
+              !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        touchOverlay.setAction(.leftPrimaryFire, visible: true)
+        if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
+            _ = try? UT99TouchProfileStore.upsert(saved)
+        }
     }
 
     /// Standard, Bunny Track, then any other saved profiles, in order.
