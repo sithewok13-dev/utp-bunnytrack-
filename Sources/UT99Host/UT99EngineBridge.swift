@@ -964,7 +964,7 @@ final class UT99EngineBridge {
         let pointerScale = sdlPointerScale
         pointerScaleLock.unlock()
         let enginePoint = CGPoint(x: location.x / pointerScale, y: location.y / pointerScale)
-        let x =Int32(max(0, min(CGFloat(Int32.max), enginePoint.x)).rounded())
+        let x = Int32(max(0, min(CGFloat(Int32.max), enginePoint.x)).rounded())
         let y = Int32(max(0, min(CGFloat(Int32.max), enginePoint.y)).rounded())
         let (window, windowID) = focusedSDLWindow()
         if let handle,
