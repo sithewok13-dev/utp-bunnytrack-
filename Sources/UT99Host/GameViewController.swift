@@ -4858,6 +4858,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             hostMenuPanel.isHidden = false
             view.bringSubviewToFront(hostMenuPanel)
         }
+        bringTouchFirstChromeToFront()
         view.bringSubviewToFront(menuButton)
         if let launchTransitionView { view.bringSubviewToFront(launchTransitionView) }
         hostWindow.windowLevel = UIWindow.Level.normal + 1
@@ -4978,6 +4979,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             view.bringSubviewToFront(touchSettingsPanel)
         }
         if let menuKeyboardPanel { view.bringSubviewToFront(menuKeyboardPanel) }
+        bringTouchFirstChromeToFront()
         view.bringSubviewToFront(menuButton)
         launchTransitionView?.removeFromSuperview()
         launchTransitionView = nil
@@ -5624,6 +5626,9 @@ extension GameViewController: UITextFieldDelegate {
         lastHostWatchTick = now
         if isEngineActive { keepHostWindowAboveEngine() }
         updateTouchFirstChrome()
+        if !UserDefaults.standard.bool(forKey: "ut99.touch.migration.bunnyTrackDodgePlacement.v1") {
+            applyOneTimeProfileMigrations()
+        }
         if hostState == .running {
             followEngineMenuState()
         } else {
@@ -5854,6 +5859,18 @@ extension GameViewController: UITextFieldDelegate {
                 }
             }
         }
+        // Put the dodge pair above JUMP in Bunny Track profiles saved before
+        // that placement existed. Needs a laid-out overlay, so it retries
+        // from the watch tick until it can place them.
+        let placementKey = "ut99.touch.migration.bunnyTrackDodgePlacement.v1"
+        if activeTouchProfileName == UT99TouchProfileName.bunnyTrack,
+           !defaults.bool(forKey: placementKey), !touchOverlay.editingLayout,
+           touchOverlay.placeBunnyTrackButtons() {
+            defaults.set(true, forKey: placementKey)
+            if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
+                _ = try? UT99TouchProfileStore.upsert(saved)
+            }
+        }
         // Bunny Track profiles saved before the dodge buttons used FIRE as a
         // right dodge. Move them to ◀ DODGE (ALT), DODGE ▶ and a shooting FIRE.
         let key = "ut99.touch.migration.bunnyTrackDodgeButtons.v1"
@@ -5901,6 +5918,15 @@ extension GameViewController: UITextFieldDelegate {
     }
 
     // MARK: Options tray
+
+    /// The touch overlay covers the whole screen and is raised on every
+    /// layout pass; without this the tray, console and sheets stayed visible
+    /// beneath it while every tap went to the look and move pads.
+    func bringTouchFirstChromeToFront() {
+        for subview in view.subviews where subview.tag == Self.touchFirstChromeTag {
+            view.bringSubviewToFront(subview)
+        }
+    }
 
     private func showOptionsTray() {
         closeOptionsTray()

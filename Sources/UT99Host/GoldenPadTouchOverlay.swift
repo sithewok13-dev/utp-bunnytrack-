@@ -884,9 +884,36 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                 scale: 1.25
             )
         }
+        _ = placeBunnyTrackButtons()
         savePlacements()
         setNeedsLayout()
         NSLog("UT99 touch Bunny Track layout applied hidden=%lu", touchConfiguration.hiddenActions.count)
+    }
+
+    /// Bunny Track's thumb cluster: ◀ DODGE and DODGE ▶ as a pair just above
+    /// JUMP, FIRE to JUMP's left, all within a short reach of the jump thumb.
+    /// Returns false (placing nothing) before the overlay has a size.
+    @discardableResult
+    func placeBunnyTrackButtons() -> Bool {
+        layoutIfNeeded()
+        guard let jump = buttons[.jump], bounds.width > 0, bounds.height > 0,
+              jump.bounds.width > 0 else { return false }
+        let center = jump.center
+        let size = jump.bounds.width
+        let side: CGFloat = touchConfiguration.leftHanded ? -1 : 1
+        func place(_ action: Action, dx: CGFloat, dy: CGFloat, scale: CGFloat) {
+            placements[action.rawValue] = UT99TouchPlacement(
+                x: (center.x + side * dx * size) / bounds.width,
+                y: (center.y + dy * size) / bounds.height,
+                scale: scale
+            )
+        }
+        place(.dodge, dx: 0.1, dy: -1.0, scale: 1)
+        place(.alternateFire, dx: -0.85, dy: -0.9, scale: 1)
+        place(.primaryFire, dx: -1.15, dy: 0.1, scale: 1.25)
+        savePlacements()
+        setNeedsLayout()
+        return true
     }
 
     func setLeftHanded(_ enabled: Bool) {
