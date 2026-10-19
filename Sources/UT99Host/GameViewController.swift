@@ -3550,7 +3550,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
 
         let fireButtonsDodge = UISwitch()
         fireButtonsDodge.isOn = dodgeConfiguration.fireButtonsDodge
-        fireButtonsDodge.accessibilityLabel = "ALT dodges left and FIRE dodges right"
+        fireButtonsDodge.accessibilityLabel = "ALT dodges left and DODGE dodges right"
         fireButtonsDodge.addTarget(self, action: #selector(touchFireButtonsDodgeChanged(_:)), for: .valueChanged)
 
         let customHold = UISwitch()
@@ -3598,7 +3598,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsRow(title: "Invert vertical look", control: invertLook),
             touchSettingsSection("BUNNY TRACK"),
             bunnyTrack,
-            touchSettingsRow(title: "ALT ◀ / FIRE ▶ dodge", control: fireButtonsDodge),
+            touchSettingsRow(title: "◀ DODGE / DODGE ▶ buttons", control: fireButtonsDodge),
             touchSettingsRow(title: "WALK button", control: walkVisible),
             touchSettingsRow(title: "CUSTOM button", control: customVisible),
             customCommand,
@@ -3802,8 +3802,11 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         var configuration = touchOverlay.touchConfiguration
         configuration.fireButtonsDodge = sender.isOn
         touchOverlay.setTouchConfiguration(configuration)
-        // ALT must be on screen to dodge left.
-        if sender.isOn { touchOverlay.setAction(.alternateFire, visible: true) }
+        // ALT (◀ DODGE) and DODGE ▶ must be on screen.
+        if sender.isOn {
+            touchOverlay.setAction(.alternateFire, visible: true)
+            touchOverlay.setAction(.dodge, visible: true)
+        }
     }
 
     @objc private func touchMarkersChanged(_ sender: UISwitch) {
@@ -5822,15 +5825,22 @@ extension GameViewController: UITextFieldDelegate {
         NSLog("UT99 touch profile active=%@", name)
     }
 
-    /// The first BT preset hid the left-thumb FIRE, but FIRE joins the game
-    /// and shoots BT targets (ALT/FIRE on the right dodge). Show it once in a
-    /// Bunny Track profile saved before that; the player can hide it again.
+    /// Bunny Track profiles saved before the dodge buttons used FIRE as a
+    /// right dodge and a look-side flick. Move them once to ◀ DODGE (ALT),
+    /// DODGE ▶ and a shooting FIRE; the player can change any of it again.
     private func restoreBunnyTrackFireIfNeeded() {
-        let key = "ut99.touch.migration.bunnyTrackFire.v1"
+        let key = "ut99.touch.migration.bunnyTrackDodgeButtons.v1"
         guard activeTouchProfileName == UT99TouchProfileName.bunnyTrack,
               !UserDefaults.standard.bool(forKey: key) else { return }
         UserDefaults.standard.set(true, forKey: key)
-        touchOverlay.setAction(.leftPrimaryFire, visible: true)
+        var configuration = touchOverlay.touchConfiguration
+        configuration.flickDodgeEnabled = false
+        configuration.fireButtonsDodge = true
+        touchOverlay.setTouchConfiguration(configuration)
+        touchOverlay.setAction(.leftPrimaryFire, visible: false)
+        touchOverlay.setAction(.primaryFire, visible: true)
+        touchOverlay.setAction(.alternateFire, visible: true)
+        touchOverlay.setAction(.dodge, visible: true)
         if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
             _ = try? UT99TouchProfileStore.upsert(saved)
         }

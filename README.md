@@ -157,16 +157,18 @@ The touch interface is designed as a full-bleed landscape overlay:
   including on servers, and hands back the small turn the flick began. A
   separate DODGE swipe pad is available in Controls & Display.
 - **Bunny Track:** Controls & Display → Apply BT Layout hides combat and
-  inventory buttons, turns ALT into a one-tap left dodge and FIRE into a
-  right dodge, slows the look curve, and adds a hold-to-walk WALK
+  inventory buttons, turns ALT into a one-tap ◀ DODGE and the DODGE button
+  (above FIRE) into a one-tap DODGE ▶, keeps FIRE shooting (to join and to
+  hit BT targets), turns the look-side flick off, slows the look curve, and
+  adds a hold-to-walk WALK
   button and a CUSTOM button that runs a console command you choose
   (default `suicide`). UTP binds those two to Home and Insert in User.ini
   each time the game starts.
-- **Menus:** while touch controls show, MENU replaces the `•••` button: tap
-  it for UT's menu, hold it for the options tray (profile, keyboard, console,
-  recent servers, MENU/PLAY, layout, settings, more). UTP follows UT's own
-  menu state, so UT menus are tapped directly — long-press to right-click,
-  e.g. to refresh or ping the server list.
+- **Menus:** tap MENU for UT's menu (and again to return to the match), hold
+  it for the options tray (profile, keyboard, console, recent servers,
+  MENU/PLAY, layout, settings, more); `•••` stays available. UT menus are
+  tapped directly: drag up or down to scroll a list, long-press to
+  right-click, e.g. to refresh or ping the server list.
 - **Profiles:** Standard and Bunny Track keep separate layouts and settings;
   UTP switches to Bunny Track on `CTF-BT-` maps and back elsewhere.
 - **Customization:** opacity, scale, handedness, visibility, drag/pinch layout

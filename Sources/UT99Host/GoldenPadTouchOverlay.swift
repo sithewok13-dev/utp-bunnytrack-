@@ -1294,15 +1294,12 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    /// With FIRE/ALT dodging on, those two buttons are one-tap side dodges
-    /// in gameplay. Menus keep FIRE as SELECT.
+    /// With button dodging on, ALT is a one-tap left dodge in gameplay and
+    /// the DODGE button a one-tap right dodge (see `dodgeTouchBegan`). FIRE
+    /// always shoots: it joins the game and hits BT targets.
     private func dodgeDirection(for action: Action) -> UT99DodgeDirection? {
         guard touchConfiguration.fireButtonsDodge, !menuInteractionActive else { return nil }
-        switch action {
-        case .alternateFire: return .left
-        case .primaryFire: return .right
-        default: return nil
-        }
+        return action == .alternateFire ? .left : nil
     }
 
     @objc private func buttonDown(_ rawSender: UIButton) {
@@ -1444,9 +1441,11 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     private func refreshActionTitles() {
         buttons[.primaryFire]?.setTitle(menuInteractionActive ? "SELECT" : title(for: .primaryFire))
         buttons[.primaryFire]?.accessibilityLabel = menuInteractionActive ? "Select" : title(for: .primaryFire)
-        buttons[.alternateFire]?.setTitle(title(for: .alternateFire))
-        buttons[.alternateFire]?.accessibilityLabel = title(for: .alternateFire)
-        for action in [Action.primaryFire, .alternateFire] where !menuInteractionActive {
+        for action in [Action.alternateFire, .dodge] {
+            buttons[action]?.setTitle(title(for: action))
+            buttons[action]?.accessibilityLabel = title(for: action)
+        }
+        for action in [Action.primaryFire, .alternateFire, .dodge] where !menuInteractionActive {
             buttons[action]?.accessibilityHint = accessibilityHint(for: action)
         }
     }
@@ -1455,9 +1454,16 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         guard !editingLayout, !menuInteractionActive,
               let button = sender as? UT99TouchActionButton,
               let touch = event.touches(for: sender)?.first else { return }
+        updateAppearance(of: button, for: .dodge, pressed: true)
+        if touchConfiguration.fireButtonsDodge {
+            // DODGE ▶: one tap, no swipe, to pair with ALT's ◀ DODGE.
+            dodgeTouchOrigin = nil
+            if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
+            onDodge?(.right, false)
+            return
+        }
         dodgeTouchOrigin = touch.location(in: self)
         if touchConfiguration.dodgeHaptics { dodgeHaptic.prepare() }
-        updateAppearance(of: button, for: .dodge, pressed: true)
     }
 
     @objc private func dodgeTouchMoved(_ sender: UIButton, forEvent event: UIEvent) {
@@ -1526,7 +1532,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func title(for action: Action) -> String {
         switch action {
-        case .primaryFire where touchConfiguration.fireButtonsDodge: "DODGE ▶"
+        case .dodge where touchConfiguration.fireButtonsDodge: "DODGE ▶"
         case .alternateFire where touchConfiguration.fireButtonsDodge: "◀ DODGE"
         case .primaryFire, .leftPrimaryFire: "FIRE"
         case .alternateFire: "ALT"
@@ -1573,7 +1579,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func accessibilityHint(for action: Action) -> String {
         switch action {
-        case .primaryFire where touchConfiguration.fireButtonsDodge: "Dodges right"
+        case .dodge where touchConfiguration.fireButtonsDodge: "Dodges right"
         case .alternateFire where touchConfiguration.fireButtonsDodge: "Dodges left"
         case .primaryFire, .leftPrimaryFire: "Shoots the current weapon"
         case .alternateFire: "Uses the current weapon's alternate fire"

@@ -190,11 +190,13 @@ private enum TouchConfigurationTests {
         require(preset.hiddenActions == UT99TouchConfiguration.bunnyTrackHiddenActions, "BT preset hidden set changed")
         require(!preset.hiddenActions.contains("walk") && !preset.hiddenActions.contains("customCommand") &&
                 !preset.hiddenActions.contains("jump") && !preset.hiddenActions.contains("crouch") &&
-                !preset.hiddenActions.contains("primaryFire") && !preset.hiddenActions.contains("leftPrimaryFire"),
+                !preset.hiddenActions.contains("primaryFire"),
                 "BT preset hid a control a trick-jump run needs")
-        require(preset.flickDodgeEnabled && preset.lookAcceleration == 0.2, "BT preset look tuning changed")
-        require(preset.fireButtonsDodge && !preset.hiddenActions.contains("alternateFire"),
-                "BT preset must show ALT and turn FIRE/ALT into side dodges")
+        require(!preset.flickDodgeEnabled && preset.lookAcceleration == 0.2, "BT preset look tuning changed")
+        require(preset.fireButtonsDodge && !preset.hiddenActions.contains("alternateFire") &&
+                !preset.hiddenActions.contains("dodge"),
+                "BT preset must show ◀ DODGE (ALT) and DODGE ▶ buttons")
+        require(preset.hiddenActions.contains("leftPrimaryFire"), "BT keeps FIRE on the right thumb only")
         require(!UT99TouchConfiguration.standard.fireButtonsDodge, "FIRE must shoot outside the BT layout")
         require(UT99TouchConfiguration.bunnyTrackHiddenActions.isSubset(of: UT99TouchConfiguration.supportedActionIDs),
                 "BT preset names an unknown control")

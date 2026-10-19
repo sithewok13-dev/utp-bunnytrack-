@@ -10,7 +10,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
     /// trick-jump run never needs, plus the DODGE pad the look-side flick
     /// replaces.
     static let bunnyTrackHiddenActions: Set<String> = [
-        "use", "nextWeapon", "previousWeapon", "scoreboard", "dodge"
+        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard"
     ]
     static let defaultCustomCommand = "suicide"
 
@@ -231,14 +231,14 @@ struct UT99TouchConfiguration: Codable, Equatable {
     }
 
     /// The Bunny Track preset: hide combat clutter, slow the look curve for
-    /// precise lines, and dodge with a look-side flick or ALT (left) and
-    /// FIRE (right). The left-thumb FIRE stays: it joins the game and
-    /// shoots the targets some BT maps use.
+    /// precise lines, and dodge with buttons: ALT is ◀ DODGE, the DODGE
+    /// button is DODGE ▶, and FIRE (right thumb) still shoots, to join the
+    /// game and hit the targets some BT maps use. No look-side flick.
     func applyingBunnyTrackPreset() -> UT99TouchConfiguration {
         var result = self
         result.hiddenActions = Self.bunnyTrackHiddenActions
         result.lookAcceleration = 0.2
-        result.flickDodgeEnabled = true
+        result.flickDodgeEnabled = false
         result.fireButtonsDodge = true
         return result.sanitized()
     }
