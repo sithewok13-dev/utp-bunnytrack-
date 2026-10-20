@@ -160,6 +160,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     enum Action: String, CaseIterable {
         case primaryFire, leftPrimaryFire, alternateFire, jump, crouch, dodge, walk
         case use, nextWeapon, previousWeapon, scoreboard, customCommand, pause
+        /// One-tap forward dodge. Last, so the button tags of the others
+        /// (their index here) do not change.
+        case dodgeForward
     }
 
     var onAction: ((Action, Bool) -> Void)?
@@ -890,8 +893,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         NSLog("UT99 touch Bunny Track layout applied hidden=%lu", touchConfiguration.hiddenActions.count)
     }
 
-    /// Bunny Track's thumb cluster: ◀ DODGE and DODGE ▶ as a pair just above
-    /// JUMP, FIRE to JUMP's left, all within a short reach of the jump thumb.
+    /// Bunny Track's thumb cluster: ◀ DODGE, ▲ DODGE and DODGE ▶ above JUMP,
+    /// FIRE to JUMP's left, all within a short reach of the jump thumb.
     /// Returns false (placing nothing) before the overlay has a size.
     @discardableResult
     func placeBunnyTrackButtons() -> Bool {
@@ -901,15 +904,21 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         let center = jump.center
         let size = jump.bounds.width
         let side: CGFloat = touchConfiguration.leftHanded ? -1 : 1
+        let safe = bounds.inset(by: safeAreaInsets)
         func place(_ action: Action, dx: CGFloat, dy: CGFloat, scale: CGFloat) {
+            // Keep a medium button's radius inside the safe area.
+            let radius = size * 0.4 * scale
+            let x = min(max(center.x + side * dx * size, safe.minX + radius), safe.maxX - radius)
+            let y = min(max(center.y + dy * size, safe.minY + radius), safe.maxY - radius)
             placements[action.rawValue] = UT99TouchPlacement(
-                x: (center.x + side * dx * size) / bounds.width,
-                y: (center.y + dy * size) / bounds.height,
-                scale: scale
+                x: x / bounds.width, y: y / bounds.height, scale: scale
             )
         }
-        place(.dodge, dx: 0.1, dy: -1.0, scale: 1)
-        place(.alternateFire, dx: -0.85, dy: -0.9, scale: 1)
+        // ◀ and ▶ level with each other above JUMP, ▲ a little higher
+        // between them, like arrow keys; FIRE to JUMP's left.
+        place(.alternateFire, dx: -0.8, dy: -1.0, scale: 1)
+        place(.dodge, dx: 0.8, dy: -1.0, scale: 1)
+        place(.dodgeForward, dx: 0, dy: -1.65, scale: 1)
         place(.primaryFire, dx: -1.15, dy: 0.1, scale: 1.25)
         savePlacements()
         setNeedsLayout()
@@ -1325,7 +1334,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     /// the DODGE button a one-tap right dodge (see `dodgeTouchBegan`). FIRE
     /// always shoots: it joins the game and hits BT targets.
     private func dodgeDirection(for action: Action) -> UT99DodgeDirection? {
-        guard touchConfiguration.fireButtonsDodge, !menuInteractionActive else { return nil }
+        guard !menuInteractionActive else { return nil }
+        if action == .dodgeForward { return .forward }
+        guard touchConfiguration.fireButtonsDodge else { return nil }
         return action == .alternateFire ? .left : nil
     }
 
@@ -1561,6 +1572,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         switch action {
         case .dodge where touchConfiguration.fireButtonsDodge: "DODGE ▶"
         case .alternateFire where touchConfiguration.fireButtonsDodge: "◀ DODGE"
+        case .dodgeForward: "▲ DODGE"
         case .primaryFire, .leftPrimaryFire: "FIRE"
         case .alternateFire: "ALT"
         case .jump: "JUMP"
@@ -1584,6 +1596,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .use: "hand.tap.fill"
         case .crouch: "arrow.down"
         case .dodge: "arrow.left.and.right"
+        case .dodgeForward: "arrow.up.to.line"
         case .walk: "figure.walk"
         case .customCommand: "star.fill"
         case .nextWeapon: "chevron.forward"
@@ -1608,6 +1621,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         switch action {
         case .dodge where touchConfiguration.fireButtonsDodge: "Dodges right"
         case .alternateFire where touchConfiguration.fireButtonsDodge: "Dodges left"
+        case .dodgeForward: "Dodges forward"
         case .primaryFire, .leftPrimaryFire: "Shoots the current weapon"
         case .alternateFire: "Uses the current weapon's alternate fire"
         case .jump: "Jumps"
@@ -1633,7 +1647,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .primaryFire, .leftPrimaryFire: UIColor(red: 0.08, green: 0.56, blue: 0.29, alpha: 0.92)
         case .alternateFire: UIColor(red: 0.78, green: 0.10, blue: 0.13, alpha: 0.92)
         case .jump, .crouch: UIColor(white: 0.72, alpha: 0.92)
-        case .dodge: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
+        case .dodge, .dodgeForward: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
         case .use, .scoreboard, .nextWeapon, .previousWeapon, .walk, .customCommand: UIColor(white: 0.22, alpha: 0.88)
         case .pause: UIColor(white: 0.28, alpha: 0.92)
         }

@@ -197,6 +197,24 @@ private enum TouchConfigurationTests {
                 !preset.hiddenActions.contains("dodge"),
                 "BT preset must show ◀ DODGE (ALT) and DODGE ▶ buttons")
         require(preset.hiddenActions.contains("leftPrimaryFire"), "BT keeps FIRE on the right thumb only")
+        require(!preset.hiddenActions.contains("dodgeForward") &&
+                UT99TouchConfiguration.standard.hiddenActions.contains("dodgeForward"),
+                "▲ DODGE belongs to the BT layout only")
+
+        // Window-state learner: keeps the word constant within each state
+        // and different between them, preferring a one-bit flag.
+        var learner = UT99ViewportStateLearner()
+        learner.add([7, 100, 0x10, 5], menu: true)
+        learner.add([7, 200, 0x00, 5], menu: false)
+        require(learner.learned == nil, "learned from a single sample per state")
+        learner.add([7, 300, 0x10, 5], menu: true)
+        learner.add([7, 400, 0x00, 5], menu: false)
+        require(learner.learned == UT99ViewportStateLearner.Learned(offset: 8, menuValue: 0x10, gameValue: 0),
+                "window-state word not learned")
+        require(learner.isMenu(word: 0x10) == true && learner.isMenu(word: 0) == false &&
+                learner.isMenu(word: 3) == nil, "learned word misread")
+        learner.add([7, 500, 0x00, 5], menu: true)
+        require(learner.learned == nil, "a contradicting sample kept a wrong word")
         require(!UT99TouchConfiguration.standard.fireButtonsDodge, "FIRE must shoot outside the BT layout")
         require(UT99TouchConfiguration.bunnyTrackHiddenActions.isSubset(of: UT99TouchConfiguration.supportedActionIDs),
                 "BT preset names an unknown control")

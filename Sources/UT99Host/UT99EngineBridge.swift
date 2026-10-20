@@ -513,7 +513,7 @@ final class UT99EngineBridge {
         case .jump: pushKey(key: 32, pressed: pressed) // Space=Jump
         case .use: pushKey(key: 13, pressed: pressed) // Enter=InventoryActivate
         case .crouch: pushKey(key: 99, pressed: pressed) // C=Duck
-        case .dodge: break // Directional; the DODGE pad publishes through publishTouchDodge.
+        case .dodge, .dodgeForward: break // Directional; dodges publish through publishTouchDodge.
         case .walk: pushKey(key: (1 << 30) | 74, pressed: pressed) // Home=Walking, bound by the host
         case .customCommand: pushKey(key: (1 << 30) | 73, pressed: pressed) // Insert=player's command
         case .nextWeapon: if pressed { pushMouseWheel(y: -1) } // MouseWheelDown
@@ -953,6 +953,27 @@ final class UT99EngineBridge {
             return false
         }
         return viewport.load(fromByteOffset: 0x1A8, as: Int32.self) != 0
+    }
+
+    /// The first `count` 32-bit words of the engine's current viewport, for
+    /// `UT99ViewportStateLearner`. 0x280 bytes stays inside the viewport
+    /// object, which already holds the capture member read at 0x1A8.
+    static let viewportWordCount = 0x280 / 4
+
+    func viewportWords() -> [Int32]? {
+        guard let viewport = currentViewport() else { return nil }
+        return (0..<Self.viewportWordCount).map { viewport.load(fromByteOffset: $0 * 4, as: Int32.self) }
+    }
+
+    func viewportWord(atOffset offset: Int) -> Int32? {
+        guard offset >= 0, offset < Self.viewportWordCount * 4, offset % 4 == 0,
+              let viewport = currentViewport() else { return nil }
+        return viewport.load(fromByteOffset: offset, as: Int32.self)
+    }
+
+    private func currentViewport() -> UnsafeMutableRawPointer? {
+        guard let handle, let symbol = dlsym(handle, "GCurrentViewport") else { return nil }
+        return symbol.assumingMemoryBound(to: UnsafeMutableRawPointer?.self).pointee
     }
 
     /// A normal launch enters the noninteractive CityIntro map first. Open the

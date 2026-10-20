@@ -428,6 +428,10 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     /// A playable map is loaded (from UT's log), so Escape from UT's menu
     /// returns to the match.
     fileprivate var engineInPlayableMap = false
+    fileprivate var viewportLearner = UT99ViewportStateLearner.load()
+    /// A MENU tap's known effect, sampled once UT has acted on its Escape.
+    fileprivate var pendingViewportSample: (menu: Bool, due: CFTimeInterval)?
+    fileprivate var lastLearnedWindowState: Bool?
     fileprivate var lastJoinedServer: (address: String, at: CFTimeInterval)?
     private var menuKeyboardLetterButtons: [UIButton] = []
     private var menuKeyboardShifted = false
@@ -5626,7 +5630,7 @@ extension GameViewController: UITextFieldDelegate {
         lastHostWatchTick = now
         if isEngineActive { keepHostWindowAboveEngine() }
         updateTouchFirstChrome()
-        if !UserDefaults.standard.bool(forKey: "ut99.touch.migration.bunnyTrackDodgePlacement.v1") {
+        if !UserDefaults.standard.bool(forKey: Self.bunnyTrackPlacementMigrationKey) {
             applyOneTimeProfileMigrations()
         }
         if hostState == .running {
@@ -5701,6 +5705,41 @@ extension GameViewController: UITextFieldDelegate {
     /// UWindow menu. Only changes switch modes, so a manual MENU/PLAY choice
     /// from the tray stands until UT itself moves between menu and play.
     private func followEngineMenuState() {
+        if let pending = pendingViewportSample {
+            guard CACurrentMediaTime() >= pending.due else { return }
+            pendingViewportSample = nil
+            if let words = engineBridge.viewportWords() {
+                let before = viewportLearner.learned
+                viewportLearner.add(words, menu: pending.menu)
+                viewportLearner.save()
+                lastLearnedWindowState = pending.menu
+                if viewportLearner.learned != before {
+                    NSLog("UT99 viewport window state learned=%@ menuSamples=%lu gameSamples=%lu",
+                          viewportLearner.learned.map {
+                              String(format: "offset=0x%X menu=%d game=%d", $0.offset, $0.menuValue, $0.gameValue)
+                          } ?? "none",
+                          viewportLearner.menuSamples.count, viewportLearner.gameSamples.count)
+                }
+            }
+            return
+        }
+        // A learned window-state word catches every UT window, including the
+        // ones the player did not open with MENU (map vote, MOTD).
+        if let learned = viewportLearner.learned,
+           let word = engineBridge.viewportWord(atOffset: learned.offset),
+           let windowOpen = viewportLearner.isMenu(word: word) {
+            let previous = lastLearnedWindowState
+            lastLearnedWindowState = windowOpen
+            guard let previous, previous != windowOpen else { return }
+            NSLog("UT99 viewport window state changed open=%@ mode=%@",
+                  windowOpen ? "true" : "false", originalMenuInputActive ? "menu" : "gameplay")
+            guard touchOverlay.touchConfiguration.autoMenuSwitch, !touchOverlay.editingLayout,
+                  windowOpen != originalMenuInputActive else { return }
+            setOriginalMenuInputActive(windowOpen)
+            if !windowOpen { prepareResponderFallbackGameplay() }
+            refreshHostMenu()
+            return
+        }
         let captured = engineBridge.isGameplayMouseCaptureEnabled()
         let previous = lastViewportGameplayCapture
         lastViewportGameplayCapture = captured
@@ -5807,6 +5846,7 @@ extension GameViewController: UITextFieldDelegate {
             return
         }
         refreshHostMenu()
+        pendingViewportSample = (originalMenuInputActive, CACurrentMediaTime() + 0.8)
         NSLog("UT99 MENU tap mode=%@", originalMenuInputActive ? "menu" : "gameplay")
     }
 
@@ -5841,6 +5881,8 @@ extension GameViewController: UITextFieldDelegate {
         NSLog("UT99 touch profile active=%@", name)
     }
 
+    static let bunnyTrackPlacementMigrationKey = "ut99.touch.migration.bunnyTrackDodgePlacement.v2"
+
     /// One-time changes to saved profiles, each applied the first time that
     /// profile is active; the player can change any of it again afterwards.
     private func applyOneTimeProfileMigrations() {
@@ -5859,14 +5901,24 @@ extension GameViewController: UITextFieldDelegate {
                 }
             }
         }
-        // Put the dodge pair above JUMP in Bunny Track profiles saved before
-        // that placement existed. Needs a laid-out overlay, so it retries
-        // from the watch tick until it can place them.
-        let placementKey = "ut99.touch.migration.bunnyTrackDodgePlacement.v1"
+        // ▲ DODGE is a Bunny Track button; other saved profiles keep it hidden.
+        let forwardDodgeKey = "ut99.touch.migration.forwardDodge.v1.\(activeTouchProfileName)"
+        if activeTouchProfileName != UT99TouchProfileName.bunnyTrack, !defaults.bool(forKey: forwardDodgeKey) {
+            defaults.set(true, forKey: forwardDodgeKey)
+            touchOverlay.setAction(.dodgeForward, visible: false)
+            if let saved = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+                _ = try? UT99TouchProfileStore.upsert(saved)
+            }
+        }
+        // Put ◀ ▲ ▶ DODGE above JUMP in Bunny Track profiles saved before that
+        // placement existed. Needs a laid-out overlay, so it retries from the
+        // watch tick until it can place them.
+        let placementKey = Self.bunnyTrackPlacementMigrationKey
         if activeTouchProfileName == UT99TouchProfileName.bunnyTrack,
            !defaults.bool(forKey: placementKey), !touchOverlay.editingLayout,
            touchOverlay.placeBunnyTrackButtons() {
             defaults.set(true, forKey: placementKey)
+            touchOverlay.setAction(.dodgeForward, visible: true)
             if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
                 _ = try? UT99TouchProfileStore.upsert(saved)
             }

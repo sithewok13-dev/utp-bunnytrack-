@@ -4,7 +4,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
     static let defaultsKey = "ut99.touch.configuration.v1"
     static let supportedActionIDs: Set<String> = [
         "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
-        "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause"
+        "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward"
     ]
     /// Controls the Bunny Track layout hides: combat and inventory buttons a
     /// trick-jump run never needs, plus the DODGE pad the look-side flick
@@ -92,7 +92,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
         leftHanded: false,
         // The look-side flick replaces the DODGE pad, and WALK and CUSTOM are
         // Bunny Track tools; the BT layout turns the last two on.
-        hiddenActions: ["scoreboard", "dodge", "walk", "customCommand"],
+        hiddenActions: ["scoreboard", "dodge", "walk", "customCommand", "dodgeForward"],
         lookAcceleration: 0.45,
         lookDeadZone: 0.00025,
         movementDeadZone: 0.04,
@@ -155,6 +155,12 @@ struct UT99TouchConfiguration: Codable, Equatable {
         if !defaults.bool(forKey: bunnyTrackMigrationKey) {
             configuration.hiddenActions.formUnion(["dodge", "walk", "customCommand"])
             defaults.set(true, forKey: bunnyTrackMigrationKey)
+        }
+        // ▲ DODGE is new; it starts hidden and the Bunny Track profile shows it.
+        let forwardDodgeMigrationKey = "ut99.touch.migration.forwardDodge.v1"
+        if !defaults.bool(forKey: forwardDodgeMigrationKey) {
+            configuration.hiddenActions.insert("dodgeForward")
+            defaults.set(true, forKey: forwardDodgeMigrationKey)
         }
         configuration.save(to: defaults)
         return configuration
@@ -320,6 +326,84 @@ enum UT99TouchKeyBindings {
 
 /// A dodge relative to the player's view, matching UT's double-tap
 /// directions on MoveForward, MoveBackward, StrafeLeft and StrafeRight.
+/// Learns which word of the engine's viewport object says "a UT window is
+/// open". The engine is unmodified and the obvious capture flag does not
+/// change on iOS, so the host samples the viewport after each MENU tap,
+/// whose effect it knows, and keeps the word that is constant within each
+/// state and differs between them. With that word known, windows the
+/// player did not open (map vote, a server's MOTD) switch to menu touch too.
+struct UT99ViewportStateLearner: Codable, Equatable {
+    struct Learned: Codable, Equatable {
+        var offset: Int
+        var menuValue: Int32
+        var gameValue: Int32
+    }
+
+    static let defaultsKey = "ut99.viewport.windowState.v1"
+    static let minimumSamplesPerState = 2
+    static let maximumSamplesPerState = 6
+
+    private(set) var menuSamples: [[Int32]] = []
+    private(set) var gameSamples: [[Int32]] = []
+    private(set) var learned: Learned?
+
+    /// `words` are consecutive 32-bit words from the start of the viewport.
+    mutating func add(_ words: [Int32], menu: Bool) {
+        if menu {
+            menuSamples.append(words)
+            menuSamples = Array(menuSamples.suffix(Self.maximumSamplesPerState))
+        } else {
+            gameSamples.append(words)
+            gameSamples = Array(gameSamples.suffix(Self.maximumSamplesPerState))
+        }
+        // A sample that contradicts the learned word means it was wrong.
+        if let current = learned, current.offset / 4 < words.count,
+           words[current.offset / 4] != (menu ? current.menuValue : current.gameValue) {
+            learned = nil
+        }
+        if learned == nil { learned = Self.bestCandidate(menu: menuSamples, game: gameSamples) }
+    }
+
+    /// The state a viewport word reports, or nil if it matches neither.
+    func isMenu(word: Int32) -> Bool? {
+        guard let learned else { return nil }
+        if word == learned.menuValue { return true }
+        if word == learned.gameValue { return false }
+        return nil
+    }
+
+    static func bestCandidate(menu: [[Int32]], game: [[Int32]]) -> Learned? {
+        guard menu.count >= minimumSamplesPerState, game.count >= minimumSamplesPerState else { return nil }
+        let count = (menu + game).map(\.count).min() ?? 0
+        var candidates: [Learned] = []
+        for index in 0..<count {
+            let menuValues = Set(menu.map { $0[index] })
+            let gameValues = Set(game.map { $0[index] })
+            guard menuValues.count == 1, gameValues.count == 1,
+                  let menuValue = menuValues.first, let gameValue = gameValues.first,
+                  menuValue != gameValue else { continue }
+            candidates.append(Learned(offset: index * 4, menuValue: menuValue, gameValue: gameValue))
+        }
+        // A flag is one bit (a C++ bool or a script bool bitfield); prefer
+        // those, then the earliest word.
+        func isOneBit(_ candidate: Learned) -> Bool {
+            (candidate.menuValue ^ candidate.gameValue).nonzeroBitCount == 1
+        }
+        return candidates.first(where: isOneBit) ?? (candidates.count == 1 ? candidates.first : nil)
+    }
+
+    static func load(from defaults: UserDefaults = .standard) -> UT99ViewportStateLearner {
+        guard let data = defaults.data(forKey: defaultsKey),
+              let decoded = try? JSONDecoder().decode(Self.self, from: data) else { return UT99ViewportStateLearner() }
+        return decoded
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        defaults.set(data, forKey: Self.defaultsKey)
+    }
+}
+
 /// The movement stick drives UT's digital movement keys, so any sideways
 /// component past the dead zone strafes at full speed and turns a slightly
 /// off-center thumb into a 45° diagonal. Snap to the nearest straight

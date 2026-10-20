@@ -178,6 +178,7 @@ enum UT99EctoPadReferenceLayout {
             frame("primaryFire", 0.9661016949, 0.5100000000, 62, 62),
             frame("crouch", 0.9661016949, 0.9000000000, 62, 62),
             frame("dodge", 0.9661016949, 0.4000000000, 62, 62),
+            frame("dodgeForward", 0.9000000000, 0.4000000000, 62, 62),
             frame("pause", 0.9400000000, 0.1050000000, 134, 62),
             // UT has four low-frequency utility actions that map cleanly to
             // EctoPad's four-direction pad. Weapon cycling belongs on left /
@@ -236,6 +237,9 @@ enum UT99EctoPadReferenceLayout {
         let dodge = CGRect(x: jump.maxX - medium,
                            y: fire.minY - medium - 8 * scale,
                            width: medium, height: medium)
+        // ▲ DODGE starts beside DODGE; the Bunny Track layout moves both.
+        let dodgeForward = CGRect(x: dodge.minX - medium - 10 * scale, y: dodge.minY,
+                                  width: medium, height: medium)
         let d = 36 * scale
         let dCenter = CGPoint(x: move.maxX + 18 * scale + 1.5 * d, y: move.midY)
         let startWidth = 92 * scale
@@ -249,6 +253,7 @@ enum UT99EctoPadReferenceLayout {
             "jump": jump,
             "crouch": crouch,
             "dodge": dodge,
+            "dodgeForward": dodgeForward,
             "pause": CGRect(x: midX - startWidth / 2,
                               y: minY + margin,
                               width: startWidth, height: small),
