@@ -172,6 +172,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     var onDodge: ((UT99DodgeDirection, _ undoLook: Bool) -> Void)?
     /// A look touch began; the host starts counting look it may need to undo.
     var onLookBegan: (() -> Void)?
+    /// True while another device aims (an iPhone mouse): touch look is off so
+    /// the taps AssistiveTouch makes for mouse clicks cannot turn the view.
+    var isTouchLookSuppressed: (() -> Bool)?
     /// MENU was held: the host opens its options tray.
     var onMenuHold: (() -> Void)?
     var onMove: ((CGPoint, Bool) -> Void)?
@@ -1213,6 +1216,10 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     @objc private func lookChanged(_ gesture: UIPanGestureRecognizer) {
         guard !editingLayout, !menuInteractionActive else { return }
+        if isTouchLookSuppressed?() == true {
+            if lookAnchor != nil { finishLookInput() }
+            return
+        }
         let point = gesture.location(in: lookPad)
         if gesture.state == .began || lookAnchor == nil {
             lookAnchor = point

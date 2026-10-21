@@ -110,6 +110,9 @@ private final class UT99GameSurfaceInputView: UIView {
             return
         }
         if inputMode == .gameplayLook && location.x < bounds.midX { return }
+        // A mouse aims (iPhone experiment); a finger here is AssistiveTouch's
+        // click, not a look drag.
+        if isPointerCaptured?() == true { return }
         trackedTouch = touch
         lastLookLocation = location
     }
@@ -350,6 +353,25 @@ private final class UT99GameSurfaceInputView: UIView {
 
 }
 
+/// A transparent full-screen view that takes a touch only when asked, so a
+/// touch can be dropped without changing any control beneath it.
+final class UT99TouchShieldView: UIView {
+    var shouldSwallow: (() -> Bool)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isAccessibilityElement = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard event?.type == .touches, shouldSwallow?() == true else { return nil }
+        return self
+    }
+}
+
 /// Apple requires a GCEventViewController root when a game consumes physical
 /// controller input through GCController profiles. Keeping controller UI
 /// interaction disabled routes those events to the native game bindings
@@ -382,6 +404,20 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         UIKeyboardHIDUsage.keyboardD.rawValue,
     ]
     private var pointerCaptureRoutingActive = false
+    /// iPhone has no pointer lock, so a mouse paired through AssistiveTouch
+    /// never reaches the captured path. Experimental: in gameplay with
+    /// capture on, read GCMouse's raw deltas anyway.
+    private let isPhoneDevice = UIDevice.current.userInterfaceIdiom == .phone
+    private var phoneMouseLookActive: Bool {
+        isPhoneDevice && isPointerCaptureEnabled && !originalMenuInputActive && hostState == .running
+    }
+    private var mouseRoutingActive: Bool { pointerCaptureRoutingActive || phoneMouseLookActive }
+    /// AssistiveTouch also turns each click into a tap at its cursor. Touches
+    /// starting right after a mouse button edge are swallowed by the shield.
+    private let phoneMouseEdgeLock = NSLock()
+    private var lastPhoneMouseButtonEdge: CFTimeInterval = 0
+    private var phoneMouseMovementLogged = false
+    private let phoneMouseTapShield = UT99TouchShieldView()
     private var configuredMouseIDs: Set<ObjectIdentifier> = []
     private let configuredMouseLock = NSLock()
     private var capturedMouseButtonModes: [UInt8: Bool] = [:]
@@ -851,8 +887,28 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             self?.showTouchMarker(at: location, label: label)
         }
         gameSurfaceInputView.isPointerCaptured = { [weak self] in
-            self?.pointerCaptureRoutingActive == true
+            self?.mouseRoutingActive == true
         }
+        touchOverlay.isTouchLookSuppressed = { [weak self] in
+            self?.phoneMouseLookActive == true
+        }
+        phoneMouseTapShield.shouldSwallow = { [weak self] in
+            guard let self, self.phoneMouseLookActive else { return false }
+            self.phoneMouseEdgeLock.lock()
+            let since = CACurrentMediaTime() - self.lastPhoneMouseButtonEdge
+            self.phoneMouseEdgeLock.unlock()
+            if since < 0.5 { NSLog("UT99 phone mouse touch after button edge ms=%.0f", since * 1000) }
+            return since < 0.12
+        }
+        phoneMouseTapShield.translatesAutoresizingMaskIntoConstraints = false
+        phoneMouseTapShield.tag = Self.touchFirstChromeTag
+        view.addSubview(phoneMouseTapShield)
+        NSLayoutConstraint.activate([
+            phoneMouseTapShield.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            phoneMouseTapShield.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            phoneMouseTapShield.topAnchor.constraint(equalTo: view.topAnchor),
+            phoneMouseTapShield.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
         view.addSubview(gameSurfaceInputView)
         NSLayoutConstraint.activate([
             gameSurfaceInputView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -1357,7 +1413,11 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
 
         mouse.handlerQueue = controllerMonitorQueue
         input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in
-            guard let self, self.pointerCaptureRoutingActive else { return }
+            guard let self, self.mouseRoutingActive else { return }
+            if !self.pointerCaptureRoutingActive && !self.phoneMouseMovementLogged {
+                self.phoneMouseMovementLogged = true
+                NSLog("UT99 phone mouse raw movement received dx=%.2f dy=%.2f", deltaX, deltaY)
+            }
             let sensitivity = self.pointerSensitivity
             let scaledX = deltaX * sensitivity
             let scaledY = deltaY * sensitivity
@@ -1387,7 +1447,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             self.engineBridge.publishHardwareMouseButton(button: 2, pressed: pressed)
         }
         input.scroll.valueChangedHandler = { [weak self] _, _, y in
-            guard let self, self.pointerCaptureRoutingActive, abs(y) >= 0.01 else { return }
+            guard let self, self.mouseRoutingActive, abs(y) >= 0.01 else { return }
             self.engineBridge.publishHardwareMouseWheel(y: y > 0 ? 1 : -1)
         }
         NSLog("UT99 mouse configured vendor=%@", mouse.vendorName ?? "unknown")
@@ -1396,10 +1456,17 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     /// Return the mode that owned the press. Releases remain deliverable after
     /// pointer lock is revoked so Fire or Alt-Fire cannot become stuck.
     private func captureMouseButton(button: UInt8, pressed: Bool) -> Bool? {
+        if isPhoneDevice {
+            phoneMouseEdgeLock.lock()
+            lastPhoneMouseButtonEdge = CACurrentMediaTime()
+            phoneMouseEdgeLock.unlock()
+            NSLog("UT99 phone mouse button=%u pressed=%@ routing=%@", button, pressed ? "true" : "false",
+                  phoneMouseLookActive ? "phone" : (pointerCaptureRoutingActive ? "locked" : "off"))
+        }
         capturedMouseButtonLock.lock()
         defer { capturedMouseButtonLock.unlock() }
         if pressed {
-            guard pointerCaptureRoutingActive else { return nil }
+            guard mouseRoutingActive else { return nil }
             capturedMouseButtonModes[button] = originalMenuInputActive
             return originalMenuInputActive
         }
