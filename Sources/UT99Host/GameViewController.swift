@@ -459,10 +459,20 @@ final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
         backgroundColor = .clear
         isAccessibilityElement = false
         isMultipleTouchEnabled = false
+    }
+
+    /// Pointer samples come from a hover recognizer on the host's root view
+    /// (GameViewController adds it): a root recognizer sees the pointer over
+    /// any control, where one on this sibling view saw none at all.
+    func makeHoverRecognizer() -> UIHoverGestureRecognizer {
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         hover.delegate = self
-        addGestureRecognizer(hover)
+        hover.cancelsTouchesInView = false
+        return hover
     }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
     private var hidEventsSeen = 0
     private var hidEventsLogged = 0
@@ -488,7 +498,6 @@ final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
             reset()
             return nil
         }
-        if event?.type == .hover { return self }
         if fireTouch != nil { return self }
         guard event?.type == .touches, let sample = lastSample,
               hypot(point.x - sample.x, point.y - sample.y) <= Self.clickMatchDistance else { return nil }
@@ -1136,6 +1145,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         phoneMouseAimView.onFire = { [weak self] pressed in
             self?.engineBridge.publishTouchAction(.primaryFire, pressed: pressed)
         }
+        view.addGestureRecognizer(phoneMouseAimView.makeHoverRecognizer())
         phoneMouseAimView.translatesAutoresizingMaskIntoConstraints = false
         phoneMouseAimView.tag = Self.touchFirstChromeTag
         view.addSubview(phoneMouseAimView)
