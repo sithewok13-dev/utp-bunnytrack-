@@ -216,7 +216,7 @@ rg -Fq 'setNeedsUpdateOfPrefersPointerLocked()' Sources/UT99Host/GameViewControl
 rg -Fq 'UIPointerLockState.didChangeNotification' Sources/UT99Host/GameViewController.swift
 rg -Fq 'GCMouse.mice()' Sources/UT99Host/GameViewController.swift
 rg -Fq 'input.mouseMovedHandler' Sources/UT99Host/GameViewController.swift
-rg -Fq 'self?.mouseRoutingActive == true' Sources/UT99Host/GameViewController.swift
+rg -Fq 'self?.pointerCaptureRoutingActive == true' Sources/UT99Host/GameViewController.swift
 rg -Fq 'private var mouseRoutingActive: Bool { pointerCaptureRoutingActive || phoneMouseLookActive }' Sources/UT99Host/GameViewController.swift
 rg -Fq 'CAPTURE MOUSE / TRACKPAD' Sources/UT99Host/GameViewController.swift
 rg -Fq 'private static let pointerSensitivityKey = "ut99.pointer.sensitivity"' Sources/UT99Host/GameViewController.swift

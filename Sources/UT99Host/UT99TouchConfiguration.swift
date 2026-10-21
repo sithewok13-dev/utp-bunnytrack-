@@ -635,10 +635,13 @@ enum UT99EngineLogWatch {
         return .map(map)
     }
 
-    /// IPv4 with a port, e.g. 203.0.113.7:7777.
+    /// IPv4 with an optional port, e.g. 203.0.113.7:7777 or 203.0.113.7.
     static func isServerAddress(_ token: String) -> Bool {
         let parts = token.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 2, let port = Int(parts[1]), (1...65535).contains(port) else { return false }
+        guard parts.count == 1 || parts.count == 2 else { return false }
+        if parts.count == 2 {
+            guard let port = Int(parts[1]), (1...65535).contains(port) else { return false }
+        }
         let octets = parts[0].split(separator: ".", omittingEmptySubsequences: false)
         return octets.count == 4 && octets.allSatisfy { octet in
             guard let value = Int(octet), octet.count <= 3 else { return false }

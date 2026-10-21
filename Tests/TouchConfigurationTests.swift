@@ -304,8 +304,8 @@ private enum TouchConfigurationTests {
                 "the host's own log lines must be ignored")
         require(event("Log: Spawning game: Botpack.CTFGame") == nil, "unrelated line produced an event")
         require(!UT99EngineLogWatch.isServerAddress("300.1.1.1:7777") &&
-                !UT99EngineLogWatch.isServerAddress("1.2.3.4") &&
-                !UT99EngineLogWatch.isServerAddress("1.2.3.4:99999"), "invalid server address accepted")
+                UT99EngineLogWatch.isServerAddress("1.2.3.4") &&
+                !UT99EngineLogWatch.isServerAddress("1.2.3.4:99999"), "server address check wrong (port optional, must be valid)")
 
         // Recent servers: newest first, de-duplicated, bounded, map kept.
         var recent: [UT99RecentServer] = []
