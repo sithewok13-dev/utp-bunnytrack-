@@ -102,9 +102,9 @@ private final class UT99GameSurfaceInputView: UIView {
         guard trackedTouch == nil,
               let touch = touches.first(where: { $0.type != .indirectPointer }) else { return }
         let location = touch.location(in: self)
-        NSLog("UT99 surface touch began x=%.1f y=%.1f mode=%@ fingerMenu=%@",
+        NSLog("UT99 surface touch began x=%.1f y=%.1f mode=%@ fingerMenu=%@ type=%ld",
               location.x, location.y, inputMode == .originalMenu ? "menu" : "gameplay",
-              fingerMenuEnabled ? "true" : "false")
+              fingerMenuEnabled ? "true" : "false", touch.type.rawValue)
         if inputMode == .originalMenu {
             if fingerMenuEnabled { beginMenuTouch(touch, at: location) }
             return
@@ -139,7 +139,14 @@ private final class UT99GameSurfaceInputView: UIView {
         }
     }
 
+    private var hoverSamplesLogged = 0
+
     @objc private func pointerHovered(_ gesture: UIHoverGestureRecognizer) {
+        if hoverSamplesLogged < 12 {
+            hoverSamplesLogged += 1
+            let sample = gesture.location(in: self)
+            NSLog("UT99 pointer hover sample state=%ld x=%.1f y=%.1f", gesture.state.rawValue, sample.x, sample.y)
+        }
         guard isPointerCaptured?() != true else {
             lastHoverLocation = nil
             return
@@ -417,6 +424,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     private let phoneMouseEdgeLock = NSLock()
     private var lastPhoneMouseButtonEdge: CFTimeInterval = 0
     private var phoneMouseMovementLogged = false
+    private var anyMouseMovementLogged = false
     private let phoneMouseTapShield = UT99TouchShieldView()
     private var configuredMouseIDs: Set<ObjectIdentifier> = []
     private let configuredMouseLock = NSLock()
@@ -1399,21 +1407,35 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             mice.append(current)
         }
         for mouse in mice { configureMouse(mouse) }
-        NSLog("UT99 mouse reconciliation reason=%@ discovered=%lu configured=%lu",
-              reason, mice.count, configuredMouseIDs.count)
+        NSLog("UT99 mouse reconciliation reason=%@ discovered=%lu configured=%lu inputs=%@",
+              reason, mice.count, configuredMouseIDs.count,
+              mice.map { "\($0.vendorName ?? "unknown"):\($0.mouseInput == nil ? "nil" : "ok"):moved=\($0.mouseInput?.mouseMovedHandler == nil ? "no" : "yes")" }
+                  .joined(separator: ","))
         return !mice.isEmpty
     }
 
     private func configureMouse(_ mouse: GCMouse) {
+        // A mouse can be listed before its input profile exists. Only count it
+        // as configured once handlers are attached, so a later pass retries.
+        guard let input = mouse.mouseInput else {
+            NSLog("UT99 mouse not ready vendor=%@ input=nil", mouse.vendorName ?? "unknown")
+            return
+        }
         let id = ObjectIdentifier(mouse)
         configuredMouseLock.lock()
         let inserted = configuredMouseIDs.insert(id).inserted
         configuredMouseLock.unlock()
-        guard inserted, let input = mouse.mouseInput else { return }
+        guard inserted else { return }
 
         mouse.handlerQueue = controllerMonitorQueue
         input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in
-            guard let self, self.mouseRoutingActive else { return }
+            guard let self else { return }
+            if !self.anyMouseMovementLogged {
+                self.anyMouseMovementLogged = true
+                NSLog("UT99 mouse raw movement first event dx=%.2f dy=%.2f routing=%@",
+                      deltaX, deltaY, self.mouseRoutingActive ? "true" : "false")
+            }
+            guard self.mouseRoutingActive else { return }
             if !self.pointerCaptureRoutingActive && !self.phoneMouseMovementLogged {
                 self.phoneMouseMovementLogged = true
                 NSLog("UT99 phone mouse raw movement received dx=%.2f dy=%.2f", deltaX, deltaY)
@@ -5708,6 +5730,8 @@ extension GameViewController: UITextFieldDelegate {
         if now - lastEngineLogScan >= 1 {
             lastEngineLogScan = now
             scanEngineLogs()
+            // Attach to a mouse whose input appeared after it was listed.
+            for mouse in GCMouse.mice() where mouse.mouseInput != nil { configureMouse(mouse) }
         }
     }
 
