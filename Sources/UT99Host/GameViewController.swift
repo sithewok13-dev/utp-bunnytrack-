@@ -427,43 +427,49 @@ final class UT99TouchShapeLogger: UIGestureRecognizer {
 }
 
 /// iPhone mouse aim. iOS gives an iPhone app no raw mouse movement (that
-/// needs pointer lock, which only iPad has), but the AssistiveTouch pointer
-/// still reaches UIKit as hover samples, and each click arrives as a touch
-/// exactly at the pointer. This top-level view turns pointer movement into
-/// mouse look, keeps turning while the pointer is pushed against a side edge
-/// (it cannot move further), and turns a touch at the pointer into FIRE.
-/// It claims nothing while inactive or for touches away from the pointer.
+/// needs pointer lock, which only iPad has). What does arrive:
+/// - the AssistiveTouch pointer as hover samples (button up), and
+/// - each click or button-held drag as a touch AssistiveTouch synthesizes,
+///   recognizable by its fixed shape (see `UT99MouseTouchRecognizer`).
+/// This view turns both into mouse look, keeps turning while the pointer or
+/// drag is pushed against a side edge (it cannot move further), and turns a
+/// quick click into FIRE. It never takes touches itself.
 final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
     var isActive: (() -> Bool)?
     /// Pointer movement in UIKit points (y down).
     var onLook: ((CGPoint) -> Void)?
-    var onFire: ((Bool) -> Void)?
+    /// A quick click: FIRE once.
+    var onClick: (() -> Void)?
 
     static let edgeMargin: CGFloat = 2
-    static let clickMatchDistance: CGFloat = 14
     static let minimumEdgeSpeed: CGFloat = 220
     static let maximumEdgeSpeed: CGFloat = 1400
+    static let clickMaximumSeconds: CFTimeInterval = 0.25
+    static let clickMaximumTravel: CGFloat = 8
 
-    private var lastSample: CGPoint?
+    private(set) var lastSample: CGPoint?
     private var lastSampleTime: CFTimeInterval = 0
     private var velocityX: CGFloat = 0
-    private weak var fireTouch: UITouch?
-    private var lastFireTouchLocation: CGPoint?
     private var edgeLink: CADisplayLink?
     private var edgeVelocity: CGFloat = 0
     private var lastEdgeTick: CFTimeInterval = 0
-    private var samplesLogged = 0
+    private var hoverEventsSeen = 0
+    private var touchStartTime: CFTimeInterval = 0
+    private var touchTravel: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isAccessibilityElement = false
-        isMultipleTouchEnabled = false
+        isUserInteractionEnabled = false
     }
 
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
     /// Pointer samples come from a hover recognizer on the host's root view
-    /// (GameViewController adds it): a root recognizer sees the pointer over
-    /// any control, where one on this sibling view saw none at all.
+    /// (GameViewController adds it), which sees the pointer over any control.
     func makeHoverRecognizer() -> UIHoverGestureRecognizer {
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         hover.delegate = self
@@ -477,71 +483,80 @@ final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
     private var hidEventsSeen = 0
     private var hidEventsLogged = 0
 
-    /// Diagnostics: log the hardware event under the pointer sample. Dense at
-    /// first, then sampled, and always while the pointer sits on a side edge.
+    /// Diagnostics: log the hardware event under each pointer sample, densely
+    /// at first, then sampled, and always while the pointer sits on a side edge.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
         hidEventsSeen += 1
         let atEdge = lastSample.map { $0.x <= bounds.minX + Self.edgeMargin || $0.x >= bounds.maxX - Self.edgeMargin } ?? false
         if hidEventsLogged < 400, hidEventsSeen <= 40 || hidEventsSeen % 15 == 0 || atEdge {
             hidEventsLogged += 1
-            NSLog("UT99 phone mouse hid n=%ld edge=%@ pointer=%@ %@", hidEventsSeen, atEdge ? "true" : "false",
-                  lastSample.map { String(format: "%.1f,%.1f", $0.x, $0.y) } ?? "none",
+            NSLog("UT99 phone mouse hid n=%ld edge=%@ %@", hidEventsSeen, atEdge ? "true" : "false",
                   UT99HIDEventProbe.describe(event))
         }
         return true
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard isActive?() == true else {
-            reset()
-            return nil
-        }
-        if fireTouch != nil { return self }
-        guard event?.type == .touches, let sample = lastSample,
-              hypot(point.x - sample.x, point.y - sample.y) <= Self.clickMatchDistance else { return nil }
-        return self
-    }
-
-    private func reset() {
-        stopEdgeTurn()
-        lastSample = nil
-        velocityX = 0
-        if fireTouch != nil {
-            fireTouch = nil
-            onFire?(false)
-        }
-    }
-
     @objc private func hovered(_ gesture: UIHoverGestureRecognizer) {
-        guard isActive?() == true else { return }
         let point = gesture.location(in: self)
-        let now = CACurrentMediaTime()
+        hoverEventsSeen += 1
+        if hoverEventsSeen <= 20 || hoverEventsSeen % 60 == 0 {
+            NSLog("UT99 phone mouse hover n=%ld state=%ld x=%.1f y=%.1f active=%@", hoverEventsSeen,
+                  gesture.state.rawValue, point.x, point.y, isActive?() == true ? "true" : "false")
+        }
+        guard isActive?() == true else {
+            stopEdgeTurn()
+            lastSample = nil
+            return
+        }
         switch gesture.state {
         case .began:
             lastSample = point
-            lastSampleTime = now
+            lastSampleTime = CACurrentMediaTime()
             velocityX = 0
         case .changed:
-            if let previous = lastSample {
-                let delta = CGPoint(x: point.x - previous.x, y: point.y - previous.y)
-                let elapsed = now - lastSampleTime
-                if elapsed > 0.001 {
-                    velocityX = velocityX * 0.5 + (delta.x / CGFloat(elapsed)) * 0.5
-                }
-                onLook?(delta)
-            }
-            lastSample = point
-            lastSampleTime = now
-            updateEdgeTurn(at: point)
-            if samplesLogged < 3 {
-                samplesLogged += 1
-                NSLog("UT99 phone mouse aim hover x=%.1f y=%.1f", point.x, point.y)
-            }
+            move(to: point)
         default:
-            // The pointer stays where it was; keep the sample for clicks.
             stopEdgeTurn()
+        }
+    }
+
+    private func move(to point: CGPoint) {
+        let now = CACurrentMediaTime()
+        if let previous = lastSample {
+            let delta = CGPoint(x: point.x - previous.x, y: point.y - previous.y)
+            let elapsed = now - lastSampleTime
+            if elapsed > 0.001 {
+                velocityX = velocityX * 0.5 + (delta.x / CGFloat(elapsed)) * 0.5
+            }
+            touchTravel += hypot(delta.x, delta.y)
+            onLook?(delta)
+        }
+        lastSample = point
+        lastSampleTime = now
+        updateEdgeTurn(at: point)
+    }
+
+    // MARK: Mouse touches (from UT99MouseTouchRecognizer)
+
+    func mouseTouchBegan(at point: CGPoint) {
+        stopEdgeTurn()
+        lastSample = point
+        lastSampleTime = CACurrentMediaTime()
+        velocityX = 0
+        touchStartTime = lastSampleTime
+        touchTravel = 0
+    }
+
+    func mouseTouchMoved(to point: CGPoint) {
+        move(to: point)
+    }
+
+    func mouseTouchEnded(cancelled: Bool) {
+        stopEdgeTurn()
+        let quick = CACurrentMediaTime() - touchStartTime <= Self.clickMaximumSeconds
+        if !cancelled && quick && touchTravel <= Self.clickMaximumTravel {
+            NSLog("UT99 phone mouse click")
+            onClick?()
         }
     }
 
@@ -558,6 +573,7 @@ final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
             let link = CADisplayLink(target: self, selector: #selector(edgeTick))
             link.add(to: .main, forMode: .common)
             edgeLink = link
+            NSLog("UT99 phone mouse edge turn speed=%.0f", edgeVelocity)
         } else if !atLeft && !atRight {
             stopEdgeTurn()
         }
@@ -565,7 +581,7 @@ final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
 
     @objc private func edgeTick() {
         guard isActive?() == true else {
-            reset()
+            stopEdgeTurn()
             return
         }
         let now = CACurrentMediaTime()
@@ -578,38 +594,59 @@ final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
         edgeLink?.invalidate()
         edgeLink = nil
     }
+}
 
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard fireTouch == nil, let touch = touches.first else { return }
-        fireTouch = touch
-        lastFireTouchLocation = touch.location(in: self)
-        stopEdgeTurn()
-        NSLog("UT99 phone mouse aim click")
-        onFire?(true)
+/// Claims the touches AssistiveTouch synthesizes for mouse clicks and
+/// button-held drags while iPhone mouse aim is on, so they aim and fire
+/// instead of pressing on-screen controls. Phone logs show those touches
+/// with a fixed 47.8 pt radius and zero radius tolerance, where every finger
+/// reports a nonzero tolerance. Fingers fail this recognizer at once.
+final class UT99MouseTouchRecognizer: UIGestureRecognizer {
+    var isActive: (() -> Bool)?
+    weak var aim: UT99PhoneMouseAimView?
+    private weak var tracked: UITouch?
+
+    static func isSynthesizedMouseTouch(_ touch: UITouch) -> Bool {
+        touch.type == .direct && touch.majorRadiusTolerance == 0
     }
 
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Holding the button and moving drags the touch with the pointer:
-        // keep aiming while firing.
-        guard let fireTouch, touches.contains(fireTouch) else { return }
-        let point = fireTouch.location(in: self)
-        if let previous = lastFireTouchLocation {
-            onLook?(CGPoint(x: point.x - previous.x, y: point.y - previous.y))
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if tracked != nil {
+            for touch in touches { ignore(touch, for: event) }
+            return
         }
-        lastFireTouchLocation = point
-        lastSample = point
-        lastSampleTime = CACurrentMediaTime()
+        guard isActive?() == true, touches.count == 1, let touch = touches.first,
+              Self.isSynthesizedMouseTouch(touch) else {
+            state = .failed
+            return
+        }
+        tracked = touch
+        aim?.mouseTouchBegan(at: touch.location(in: aim))
+        state = .began
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { endFire(touches) }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { endFire(touches) }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let tracked, touches.contains(tracked) else { return }
+        aim?.mouseTouchMoved(to: tracked.location(in: aim))
+        state = .changed
+    }
 
-    private func endFire(_ touches: Set<UITouch>) {
-        guard let fireTouch, touches.contains(fireTouch) else { return }
-        lastSample = fireTouch.location(in: self)
-        self.fireTouch = nil
-        lastFireTouchLocation = nil
-        onFire?(false)
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let tracked, touches.contains(tracked) else { return }
+        aim?.mouseTouchEnded(cancelled: false)
+        self.tracked = nil
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let tracked, touches.contains(tracked) else { return }
+        aim?.mouseTouchEnded(cancelled: true)
+        self.tracked = nil
+        state = .cancelled
+    }
+
+    override func reset() {
+        tracked = nil
     }
 }
 
@@ -1142,9 +1179,20 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             self.engineBridge.publishHardwareMouseMotion(deltaX: Float(delta.x) * gain,
                                                          deltaY: Float(-delta.y) * gain)
         }
-        phoneMouseAimView.onFire = { [weak self] pressed in
-            self?.engineBridge.publishTouchAction(.primaryFire, pressed: pressed)
+        phoneMouseAimView.onClick = { [weak self] in
+            guard let self else { return }
+            // The engine owns the main run loop; release from a global queue.
+            self.engineBridge.publishTouchAction(.primaryFire, pressed: true)
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .milliseconds(70)) { [weak self] in
+                self?.engineBridge.publishTouchAction(.primaryFire, pressed: false)
+            }
         }
+        let mouseTouches = UT99MouseTouchRecognizer(target: nil, action: nil)
+        mouseTouches.isActive = { [weak self] in self?.phoneMouseLookActive == true }
+        mouseTouches.aim = phoneMouseAimView
+        mouseTouches.cancelsTouchesInView = true
+        mouseTouches.delaysTouchesBegan = true
+        view.addGestureRecognizer(mouseTouches)
         view.addGestureRecognizer(phoneMouseAimView.makeHoverRecognizer())
         phoneMouseAimView.translatesAutoresizingMaskIntoConstraints = false
         phoneMouseAimView.tag = Self.touchFirstChromeTag
@@ -1582,7 +1630,9 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     private var shouldRequestPointerCapture: Bool {
-        guard isViewLoaded,
+        // iPhone cannot lock the pointer, and asking appears to stop the
+        // AssistiveTouch pointer's hover samples that iPhone mouse aim uses.
+        guard !isPhoneDevice, isViewLoaded,
               isPointerCaptureEnabled,
               hostMenuPanel == nil,
               view.window?.windowScene?.activationState == .foregroundActive else { return false }
