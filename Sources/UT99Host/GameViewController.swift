@@ -357,6 +357,56 @@ private final class UT99GameSurfaceInputView: UIView {
 
 }
 
+/// Diagnostics for iPhone mouse aim (sideload-only private API): every UIKit
+/// pointer event wraps an IOHIDEvent. On iPad a pointer event carries the
+/// mouse's raw relative movement; if AssistiveTouch passes that through on
+/// iPhone, aim could use it instead of the accelerated, edge-bound pointer.
+/// This only reads and logs the event's fields.
+enum UT99HIDEventProbe {
+    private typealias GetType = @convention(c) (UnsafeMutableRawPointer) -> UInt32
+    private typealias GetFloat = @convention(c) (UnsafeMutableRawPointer, UInt32) -> Double
+    private typealias GetChildren = @convention(c) (UnsafeMutableRawPointer) -> Unmanaged<CFArray>?
+    private typealias GetHIDEvent = @convention(c) (AnyObject, Selector) -> UnsafeMutableRawPointer?
+
+    private static let library = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW)
+    private static func symbol<T>(_ name: String, as type: T.Type) -> T? {
+        guard let pointer = dlsym(library ?? UnsafeMutableRawPointer(bitPattern: -2), name) else { return nil }
+        return unsafeBitCast(pointer, to: type)
+    }
+    private static let getType = symbol("IOHIDEventGetType", as: GetType.self)
+    private static let getFloat = symbol("IOHIDEventGetFloatValue", as: GetFloat.self)
+    private static let getChildren = symbol("IOHIDEventGetChildren", as: GetChildren.self)
+
+    static func hidEvent(of event: UIEvent) -> UnsafeMutableRawPointer? {
+        let selector = NSSelectorFromString("_hidEvent")
+        guard event.responds(to: selector) else { return nil }
+        let implementation: IMP = event.method(for: selector)
+        return unsafeBitCast(implementation, to: GetHIDEvent.self)(event, selector)
+    }
+
+    /// "t<type>[field0,...,field9]" for the event and its children. Fields are
+    /// addressed as (type << 16) | index, IOKit's IOHIDEventFieldBase.
+    static func describe(_ event: UIEvent) -> String {
+        guard let hid = hidEvent(of: event) else { return "no-hid-event" }
+        guard getType != nil, getFloat != nil else { return "no-iokit" }
+        return describe(hid, depth: 0)
+    }
+
+    private static func describe(_ hid: UnsafeMutableRawPointer, depth: Int) -> String {
+        guard let getType, let getFloat else { return "?" }
+        let type = getType(hid)
+        let fields = (0..<10).map { String(format: "%.3f", getFloat(hid, (type << 16) | UInt32($0))) }
+        var text = "t\(type)[\(fields.joined(separator: ","))]"
+        if depth < 2, let getChildren, let children = getChildren(hid)?.takeUnretainedValue() {
+            for index in 0..<CFArrayGetCount(children) {
+                guard let child = CFArrayGetValueAtIndex(children, index) else { continue }
+                text += " {" + describe(UnsafeMutableRawPointer(mutating: child), depth: depth + 1) + "}"
+            }
+        }
+        return text
+    }
+}
+
 /// iPhone mouse aim. iOS gives an iPhone app no raw mouse movement (that
 /// needs pointer lock, which only iPad has), but the AssistiveTouch pointer
 /// still reaches UIKit as hover samples, and each click arrives as a touch
@@ -364,7 +414,7 @@ private final class UT99GameSurfaceInputView: UIView {
 /// mouse look, keeps turning while the pointer is pushed against a side edge
 /// (it cannot move further), and turns a touch at the pointer into FIRE.
 /// It claims nothing while inactive or for touches away from the pointer.
-final class UT99PhoneMouseAimView: UIView {
+final class UT99PhoneMouseAimView: UIView, UIGestureRecognizerDelegate {
     var isActive: (() -> Bool)?
     /// Pointer movement in UIKit points (y down).
     var onLook: ((CGPoint) -> Void)?
@@ -390,7 +440,26 @@ final class UT99PhoneMouseAimView: UIView {
         backgroundColor = .clear
         isAccessibilityElement = false
         isMultipleTouchEnabled = false
-        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
+        hover.delegate = self
+        addGestureRecognizer(hover)
+    }
+
+    private var hidEventsSeen = 0
+    private var hidEventsLogged = 0
+
+    /// Diagnostics: log the hardware event under the pointer sample. Dense at
+    /// first, then sampled, and always while the pointer sits on a side edge.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+        hidEventsSeen += 1
+        let atEdge = lastSample.map { $0.x <= bounds.minX + Self.edgeMargin || $0.x >= bounds.maxX - Self.edgeMargin } ?? false
+        if hidEventsLogged < 400, hidEventsSeen <= 40 || hidEventsSeen % 15 == 0 || atEdge {
+            hidEventsLogged += 1
+            NSLog("UT99 phone mouse hid n=%ld edge=%@ pointer=%@ %@", hidEventsSeen, atEdge ? "true" : "false",
+                  lastSample.map { String(format: "%.1f,%.1f", $0.x, $0.y) } ?? "none",
+                  UT99HIDEventProbe.describe(event))
+        }
+        return true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
