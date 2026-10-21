@@ -1,5 +1,6 @@
 import MetalKit
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import CryptoKit
 import UniformTypeIdentifiers
 import GameController
@@ -404,6 +405,24 @@ enum UT99HIDEventProbe {
             }
         }
         return text
+    }
+}
+
+/// Diagnostics: logs every touch's shape (radius, force) without taking
+/// part in recognition, to tell AssistiveTouch's synthesized mouse touches
+/// from fingers.
+final class UT99TouchShapeLogger: UIGestureRecognizer {
+    private var logged = 0
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches where logged < 80 {
+            logged += 1
+            let point = touch.location(in: view)
+            NSLog("UT99 touch shape x=%.1f y=%.1f type=%ld radius=%.2f tolerance=%.2f force=%.2f maxForce=%.2f taps=%ld",
+                  point.x, point.y, touch.type.rawValue, touch.majorRadius, touch.majorRadiusTolerance,
+                  touch.force, touch.maximumPossibleForce, touch.tapCount)
+        }
+        state = .failed
     }
 }
 
@@ -1099,6 +1118,11 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         gameSurfaceInputView.isPointerCaptured = { [weak self] in
             self?.pointerCaptureRoutingActive == true
         }
+        let shapeLogger = UT99TouchShapeLogger(target: nil, action: nil)
+        shapeLogger.cancelsTouchesInView = false
+        shapeLogger.delaysTouchesBegan = false
+        shapeLogger.delaysTouchesEnded = false
+        view.addGestureRecognizer(shapeLogger)
         phoneMouseAimView.isActive = { [weak self] in
             self?.phoneMouseLookActive == true
         }
