@@ -5454,11 +5454,27 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     private func rendererPoint(fromHostPoint point: CGPoint) -> CGPoint {
-        let frame = currentRendererViewportFrame()
+        // Map from where SDL's game view really is: SDL lays its view out
+        // itself, so the host's own idea of the frame can disagree (a 62 pt
+        // offset sent every menu tap one item to the right).
+        let frame = liveRendererFrame() ?? currentRendererViewportFrame()
         return CGPoint(
             x: min(max(point.x - frame.minX, 0), frame.width),
             y: min(max(point.y - frame.minY, 0), frame.height)
         )
+    }
+
+    /// SDL's game view in host coordinates, when its window is attached.
+    private func liveRendererFrame() -> CGRect? {
+        guard let scene = view.window?.windowScene else { return nil }
+        for window in scene.windows where window !== view.window {
+            guard let root = window.rootViewController,
+                  String(describing: type(of: root)).contains("SDL"),
+                  root.isViewLoaded, root.view.bounds.width > 0 else { continue }
+            let inWindow = root.view.convert(root.view.bounds, to: window)
+            return view.convert(window.convert(inWindow, to: nil), from: nil)
+        }
+        return nil
     }
 
     private func prepareBundledData() {
