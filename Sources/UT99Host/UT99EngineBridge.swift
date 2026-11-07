@@ -400,12 +400,27 @@ final class UT99EngineBridge {
               gameWidth, gameHeight)
     }
 
+    /// UT's menu scale (ConfiguredGUIScale). 3x is v469e's staged maximum;
+    /// the tray's MENU SIZE tries larger values (1.25x and 1.5x of that) as an
+    /// experiment, applied at the next start. Menu taps are divided by this.
+    static let menuScaleKey = "ut99.menu.guiScale"
+    static let menuScaleSteps: [Double] = [3.0, 3.75, 4.5]
+    static var menuGUIScale: Double {
+        let stored = UserDefaults.standard.double(forKey: menuScaleKey)
+        return menuScaleSteps.contains(stored) ? stored : 3.0
+    }
+    /// The scale the running engine was started with (taps must use it,
+    /// not a choice made since).
+    static var startedMenuGUIScale = menuGUIScale
+
     private func seedAppleGUIScaleIfMissing(in ini: String, backingScale: CGFloat) -> String {
         let targetSection = "[UMenu.UMenuRootWindow]"
         // v469e's supported maximum is 3x. A Retina-derived 2x setting left
         // the original desktop menu below a finger-sized target on the 12.9in
-        // iPad, so new installs and the prior seeded 2x value use 3x.
-        let configuredValue = "3.0"
+        // iPad, so new installs and the prior seeded 2x value use 3x. The
+        // tray's MENU SIZE writes its own choice every start.
+        Self.startedMenuGUIScale = Self.menuGUIScale
+        let configuredValue = String(format: "%.2f", Self.startedMenuGUIScale)
         var output: [String] = []
         var inTarget = false
         var foundTarget = false
@@ -425,11 +440,8 @@ final class UT99EngineBridge {
             }
             if inTarget && line.hasPrefix("ConfiguredGUIScale=") {
                 foundConfigured = true
-                let value = line.split(separator: "=", maxSplits: 1).last.flatMap { Double($0) }
-                if value == 2.0 {
-                    output.append("ConfiguredGUIScale=\(configuredValue)")
-                    continue
-                }
+                output.append("ConfiguredGUIScale=\(configuredValue)")
+                continue
             }
             if inTarget && line.hasPrefix("AutoGUIScale=") { foundAutomatic = true }
             output.append(line)
@@ -800,11 +812,11 @@ final class UT99EngineBridge {
         }
     }
 
-    /// SDLDrv multiplies every SDL mouse delta by its "Mouse Scale" (window
-    /// pixels per point: 3 on current iPhones, 2 on iPad) while UWindow lays
-    /// out in points. Unscaled points therefore land 3x too far from the
-    /// corner on iPhone. Sending points divided by that scale lands the
-    /// cursor on the touched point.
+    /// SDLDrv multiplies every SDL mouse delta by its "Mouse Scale" (pixels
+    /// per point) and UWindow moves its cursor by that many of its own units,
+    /// which are pixels / GUI scale. A touch at p points must move the cursor
+    /// p * (pixels per point) / GUI scale units, so the host sends p divided
+    /// by the GUI scale (3 on iPhone gave 3x overshoot before this).
     func updatePointerScale(_ scale: CGFloat) {
         guard scale.isFinite, scale >= 1 else { return }
         pointerScaleLock.lock()

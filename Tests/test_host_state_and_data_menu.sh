@@ -258,7 +258,7 @@ rg -Fq 'patch -s -d "$staging/source" -p1' tools/prepare_sdl2_source.sh
 rg -Fq 'let pointerScale = 1.0' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'normalizedLines.append(pointerScaleLine)' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'let enginePoint = CGPoint(x: location.x / pointerScale, y: location.y / pointerScale)' Sources/UT99Host/UT99EngineBridge.swift
-rg -Fq 'engineBridge.updatePointerScale(engineView.layer.contentsScale)' Sources/UT99Host/GameViewController.swift
+rg -Fq 'engineBridge.updatePointerScale(CGFloat(UT99EngineBridge.startedMenuGUIScale))' Sources/UT99Host/GameViewController.swift
 rg -Fq 'func publishMenuCursor(_ value: CGPoint, active: Bool)' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'self.engineBridge.publishMenuCursor(value, active: active)' Sources/UT99Host/GameViewController.swift
 rg -Fq 'self.engineBridge.publishMenuCursorClick(pressed: pressed)' Sources/UT99Host/GameViewController.swift
@@ -466,7 +466,7 @@ fi
 rg -Fq 'func publishControllerLook(_ value: CGPoint, active: Bool)' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'repeating: .milliseconds(16)' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq 'applyAppleKeyboardBindings' Sources/UT99Host/UT99DataImporter.swift
-rg -Fq 'let configuredValue = "3.0"' Sources/UT99Host/UT99EngineBridge.swift
+rg -Fq 'static let menuScaleSteps: [Double] = [3.0, 3.75, 4.5]' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq -- '-UT99ServerBrowserPointerSmokeTest' Sources/UT99Host/GameViewController.swift
 rg -Fq 'func runServerBrowserPointerSmokeTest()' Sources/UT99Host/UT99EngineBridge.swift
 rg -Fq -- '-UT99ServerBrowserJoinSmokeTest' Sources/UT99Host/GameViewController.swift

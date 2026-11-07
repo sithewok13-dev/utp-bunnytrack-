@@ -5386,7 +5386,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             engineView.setNeedsLayout()
             engineView.layoutIfNeeded()
             engineBridge.updateMenuCursorCanvasSize(rendererFrame.size)
-            engineBridge.updatePointerScale(engineView.layer.contentsScale)
+            engineBridge.updatePointerScale(CGFloat(UT99EngineBridge.startedMenuGUIScale))
             NSLog("UT99EngineBridge renderer frame=%@ bounds=%@ scale=%.2f",
                   engineView.frame.debugDescription,
                   engineView.bounds.debugDescription,
@@ -6563,6 +6563,13 @@ extension GameViewController: UITextFieldDelegate {
             ("", "camera.fill", true, { [weak self] in self?.toggleCameraButtons() }),
             ("CHEAT\n\(UserDefaults.standard.bool(forKey: Self.cheatKey) ? "ON" : "OFF")", nil, true, { [weak self] in
                 self?.setCheat(!UserDefaults.standard.bool(forKey: Self.cheatKey))
+            }),
+            (String(format: "MENU\nSIZE %g", UT99EngineBridge.menuGUIScale / 3), nil, true, { [weak self] in
+                let steps = UT99EngineBridge.menuScaleSteps
+                let current = UT99EngineBridge.menuGUIScale
+                let next = steps[((steps.firstIndex(of: current) ?? 0) + 1) % steps.count]
+                UserDefaults.standard.set(next, forKey: UT99EngineBridge.menuScaleKey)
+                self?.showHostToast(String(format: "Menu size %gx: close and reopen UTP to apply", next / 3))
             }),
             ("", "keyboard", false, { [weak self] in self?.toggleMenuTextKeyboard() }),
             ("CON-\nSOLE", nil, false, { [weak self] in self?.showConsoleBar() }),
