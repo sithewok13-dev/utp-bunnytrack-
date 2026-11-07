@@ -201,6 +201,11 @@ private enum TouchConfigurationTests {
         require(!preset.hiddenActions.contains("dodgeForward") &&
                 UT99TouchConfiguration.standard.hiddenActions.contains("dodgeForward"),
                 "▲ DODGE belongs to the BT layout only")
+        let dm = UT99TouchConfiguration.standard.applyingDeathmatchPreset()
+        require(!dm.fireButtonsDodge && dm.hiddenActions.isDisjoint(with: [
+            "primaryFire", "alternateFire", "jump", "crouch", "nextWeapon", "suicide", "mapVote", "team", "taunt",
+            "camera", "view"]) && dm.hiddenActions.isSuperset(of: ["checkpoint", "noCheckpoint", "dodge", "previousWeapon"]),
+                "DM preset: FIRE ALT JUMP DUCK, NEXT WPN and the shared top row; no BT tools")
         require(preset.hiddenActions.contains("cheat") && UT99TouchConfiguration.standard.hiddenActions.contains("cheat") &&
                 !preset.hiddenActions.contains("camera") && !preset.hiddenActions.contains("view"),
                 "CAMERA and VIEW show; the CHEAT emblem starts hidden")

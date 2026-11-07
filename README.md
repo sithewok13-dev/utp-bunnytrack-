@@ -177,6 +177,12 @@ The touch interface is designed as a full-bleed landscape overlay:
   FIRE and WALK to its left and DUCK in the corner; no weapon buttons (BT
   servers give the shock rifle). Controls & Display → Apply BT Layout puts it
   back.
+- **DM (the Standard profile):** the house right-thumb cluster: a big FIRE
+  in the corner, ALT to its left, JUMP up-left, DUCK above FIRE. **NEXT WPN**
+  (top left): tap for the next weapon; slide off it or hold it for the
+  weapon wheel, one slice per UT weapon with a drawn picture of each, and
+  lift or tap to take it (`getweapon`). Controls & Display → Apply DM Layout
+  puts it back.
 - **Menus:** tap MENU for UT's menu (and again to return to the match). Hold
   it for the tray: PROFILE, SENS (look sensitivity, default 2.0x), OPACITY
   (a slider, 20% to 100%; hold for 100%), FPS, keyboard, CONSOLE, SERVERS,

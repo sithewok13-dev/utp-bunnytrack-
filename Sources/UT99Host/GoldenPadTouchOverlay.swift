@@ -128,6 +128,7 @@ private final class UT99TouchActionButton: UIButton {
 final class UT99RadialWheelView: UIView {
     struct Item {
         let title: String
+        var icon: UIImage? = nil
     }
 
     static let outerMax: CGFloat = 168
@@ -148,6 +149,7 @@ final class UT99RadialWheelView: UIView {
     private(set) var highlighted: Int?
     private var sliceLayers: [CAShapeLayer] = []
     private var sliceLabels: [UILabel] = []
+    private var sliceIcons: [UIImageView?] = []
     private let centerTitle = UILabel()
     private let centerHint = UILabel()
     private let tick = UISelectionFeedbackGenerator()
@@ -252,6 +254,14 @@ final class UT99RadialWheelView: UIView {
     private func rebuild() {
         sliceLayers.forEach { $0.removeFromSuperlayer() }
         sliceLabels.forEach { $0.removeFromSuperview() }
+        sliceIcons.forEach { $0?.removeFromSuperview() }
+        sliceIcons = items.map { item in
+            guard let icon = item.icon else { return nil }
+            let view = UIImageView(image: icon)
+            view.contentMode = .scaleAspectFit
+            addSubview(view)
+            return view
+        }
         sliceLayers = items.map { _ in
             let layer = CAShapeLayer()
             layer.lineWidth = 1.5
@@ -262,7 +272,7 @@ final class UT99RadialWheelView: UIView {
             let label = UILabel()
             label.text = item.title
             label.textAlignment = .center
-            label.font = .boldSystemFont(ofSize: 12)
+            label.font = .boldSystemFont(ofSize: item.icon == nil ? 12 : 9)
             label.textColor = UIColor(white: 1, alpha: 0.9)
             label.adjustsFontSizeToFitWidth = true
             label.minimumScaleFactor = 0.6
@@ -281,7 +291,16 @@ final class UT99RadialWheelView: UIView {
         for (index, label) in sliceLabels.enumerated() {
             let mid = (startDegrees + span * (CGFloat(index) + 0.5)) * .pi / 180
             label.bounds = CGRect(x: 0, y: 0, width: min(76, outerRadius - innerRadius), height: 18)
-            label.center = CGPoint(x: center.x + cos(mid) * labelRadius, y: center.y + sin(mid) * labelRadius)
+            let spot = CGPoint(x: center.x + cos(mid) * labelRadius, y: center.y + sin(mid) * labelRadius)
+            if let icon = sliceIcons[index] {
+                // Icon above its name, both centred on the slice.
+                let width = min(44, (outerRadius - innerRadius) * 0.8)
+                icon.bounds = CGRect(x: 0, y: 0, width: width, height: width / 2)
+                icon.center = CGPoint(x: spot.x, y: spot.y - 6)
+                label.center = CGPoint(x: spot.x, y: spot.y + width / 4 + 2)
+            } else {
+                label.center = spot
+            }
         }
         centerTitle.frame = CGRect(x: center.x - innerRadius + 6, y: center.y - 14, width: (innerRadius - 6) * 2, height: 18)
         centerHint.frame = CGRect(x: center.x - innerRadius + 6, y: center.y + 4, width: (innerRadius - 6) * 2, height: 14)
@@ -305,10 +324,9 @@ final class UT99RadialWheelView: UIView {
             layer.path = path.cgPath
             layer.fillColor = UIColor(white: pointed ? 0.32 : 0, alpha: pointed ? 0.85 : 0.6).cgColor
             layer.strokeColor = UIColor(white: 1, alpha: pointed ? 0.9 : 0.4).cgColor
-            if index < sliceLabels.count {
-                sliceLabels[index].transform = CGAffineTransform(translationX: cos(mid) * offset,
-                                                                 y: sin(mid) * offset)
-            }
+            let shift = CGAffineTransform(translationX: cos(mid) * offset, y: sin(mid) * offset)
+            if index < sliceLabels.count { sliceLabels[index].transform = shift }
+            if index < sliceIcons.count { sliceIcons[index]?.transform = shift }
         }
         refreshCenter()
     }
@@ -324,6 +342,116 @@ final class UT99RadialWheelView: UIView {
             centerTitle.text = title
             centerHint.text = tapMode ? tapHint : slideHint
         }
+    }
+}
+
+/// UT99's weapons for NEXT WPN's wheel, in the game's own weapon order
+/// (InventoryGroup 1 to 10, then the Redeemer), with a drawn silhouette of
+/// each: the app carries no game art. Picking one runs `getweapon <class>`.
+enum UT99WeaponArt {
+    struct Weapon {
+        let id: String
+        let title: String
+        let className: String
+    }
+
+    static let weapons: [Weapon] = [
+        Weapon(id: "translocator", title: "TRANSLOC", className: "Botpack.Translocator"),
+        Weapon(id: "impact", title: "HAMMER", className: "Botpack.ImpactHammer"),
+        Weapon(id: "chainsaw", title: "CHAINSAW", className: "Botpack.ChainSaw"),
+        Weapon(id: "enforcer", title: "ENFORCER", className: "Botpack.Enforcer"),
+        Weapon(id: "bio", title: "BIO", className: "Botpack.UT_BioRifle"),
+        Weapon(id: "shock", title: "SHOCK", className: "Botpack.ShockRifle"),
+        Weapon(id: "pulse", title: "PULSE", className: "Botpack.PulseGun"),
+        Weapon(id: "ripper", title: "RIPPER", className: "Botpack.Ripper"),
+        Weapon(id: "minigun", title: "MINIGUN", className: "Botpack.Minigun2"),
+        Weapon(id: "flak", title: "FLAK", className: "Botpack.UT_FlakCannon"),
+        Weapon(id: "rocket", title: "ROCKET", className: "Botpack.UT_Eightball"),
+        Weapon(id: "sniper", title: "SNIPER", className: "Botpack.SniperRifle"),
+        Weapon(id: "redeemer", title: "REDEEMER", className: "Botpack.WarheadLauncher"),
+    ]
+
+    private enum Shape {
+        case box(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)   // x, y, w, h, corner
+        case oval(CGFloat, CGFloat, CGFloat, CGFloat)
+        case poly([CGPoint])
+        case ring(CGFloat, CGFloat, CGFloat, CGFloat)          // a hollow oval
+    }
+
+    private static func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
+
+    /// Each weapon on a 48 x 24 canvas, pointing right; the accent colour
+    /// follows the weapon's ammo family.
+    private static let art: [String: (UIColor, [Shape])] = [
+        "translocator": (UIColor(red: 0.55, green: 0.85, blue: 1, alpha: 1),
+                         [.box(4, 9, 22, 7, 2), .box(10, 14, 5, 8, 1), .ring(26, 4, 17, 16)]),
+        "impact": (UIColor(red: 1, green: 0.82, blue: 0.35, alpha: 1),
+                   [.box(2, 10, 13, 5, 1.5), .box(14, 5, 22, 15, 3), .box(36, 3, 5, 19, 1.5)]),
+        "chainsaw": (UIColor(red: 1, green: 0.62, blue: 0.3, alpha: 1),
+                     [.box(2, 9, 13, 8, 2), .box(14, 8, 32, 9, 4.5),
+                      .poly([p(16, 8), p(19, 4), p(22, 8), p(25, 4), p(28, 8), p(31, 4), p(34, 8), p(37, 4), p(40, 8)])]),
+        "enforcer": (UIColor(white: 0.9, alpha: 1),
+                     [.box(10, 5, 28, 7, 1.5), .box(38, 6, 5, 5, 1),
+                      .poly([p(13, 11), p(23, 11), p(19, 22), p(10, 22)])]),
+        "bio": (UIColor(red: 0.45, green: 1, blue: 0.4, alpha: 1),
+                [.poly([p(2, 8), p(14, 8), p(14, 16), p(4, 19)]), .oval(13, 3, 19, 18), .box(30, 9, 15, 6, 2)]),
+        "shock": (UIColor(red: 0.75, green: 0.55, blue: 1, alpha: 1),
+                  [.box(2, 9, 8, 7, 1.5), .box(8, 8, 31, 8, 2), .box(15, 4, 4, 16, 2), .box(21, 4, 4, 16, 2),
+                   .box(27, 4, 4, 16, 2), .box(38, 9, 8, 6, 1.5)]),
+        "pulse": (UIColor(red: 0.5, green: 1, blue: 0.75, alpha: 1),
+                  [.box(5, 6, 27, 12, 4), .box(31, 5, 11, 3, 1), .box(31, 10.5, 14, 3, 1), .box(31, 16, 11, 3, 1),
+                   .box(12, 16, 5, 7, 1)]),
+        "ripper": (UIColor(red: 1, green: 0.85, blue: 0.5, alpha: 1),
+                   [.box(3, 9, 25, 8, 2), .box(9, 15, 5, 7, 1), .ring(27, 3, 18, 18)]),
+        "minigun": (UIColor(red: 1, green: 0.9, blue: 0.55, alpha: 1),
+                    [.oval(2, 4, 16, 16), .box(16, 6, 28, 3, 1.2), .box(16, 10.5, 30, 3, 1.2),
+                     .box(16, 15, 28, 3, 1.2), .box(31, 4, 3, 16, 1)]),
+        "flak": (UIColor(red: 1, green: 0.55, blue: 0.35, alpha: 1),
+                 [.box(3, 5, 27, 14, 3), .box(29, 6, 16, 12, 1.5), .box(10, 17, 6, 6, 1)]),
+        "rocket": (UIColor(red: 1, green: 0.45, blue: 0.4, alpha: 1),
+                   [.box(5, 4, 33, 16, 3.5), .box(37, 6, 8, 12, 1.5), .box(14, 4, 2, 16, 0), .box(24, 4, 2, 16, 0)]),
+        "sniper": (UIColor(red: 0.6, green: 0.9, blue: 1, alpha: 1),
+                   [.poly([p(1, 10), p(10, 9), p(10, 16), p(3, 18)]), .box(9, 9, 15, 6, 1.5), .box(22, 10.5, 25, 3, 1),
+                    .box(12, 4, 15, 4, 2)]),
+        "redeemer": (UIColor(red: 1, green: 0.35, blue: 0.35, alpha: 1),
+                     [.box(3, 7, 32, 10, 5), .poly([p(34, 6), p(47, 12), p(34, 18)]),
+                      .poly([p(4, 7), p(9, 2), p(12, 7)]), .poly([p(4, 17), p(9, 22), p(12, 17)])]),
+    ]
+
+    private static var cache: [String: UIImage] = [:]
+
+    static func icon(for id: String) -> UIImage? {
+        if let image = cache[id] { return image }
+        guard let entry = art[id] else { return nil }
+        let (accent, shapes) = entry
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 3
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 48, height: 24), format: format).image { context in
+            let cg = context.cgContext
+            cg.setFillColor(accent.cgColor)
+            cg.setShadow(offset: .zero, blur: 2, color: accent.withAlphaComponent(0.6).cgColor)
+            for shape in shapes {
+                switch shape {
+                case let .box(x, y, w, h, corner):
+                    UIBezierPath(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerRadius: corner).fill()
+                case let .oval(x, y, w, h):
+                    UIBezierPath(ovalIn: CGRect(x: x, y: y, width: w, height: h)).fill()
+                case let .poly(points):
+                    let path = UIBezierPath()
+                    path.move(to: points[0])
+                    points.dropFirst().forEach { path.addLine(to: $0) }
+                    path.close()
+                    path.fill()
+                case let .ring(x, y, w, h):
+                    let path = UIBezierPath(ovalIn: CGRect(x: x, y: y, width: w, height: h))
+                    path.append(UIBezierPath(ovalIn: CGRect(x: x + w * 0.3, y: y + h * 0.3, width: w * 0.4, height: h * 0.4)))
+                    path.usesEvenOddFillRule = true
+                    path.fill()
+                }
+            }
+        }
+        cache[id] = image
+        return image
     }
 }
 
@@ -474,6 +602,11 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     static let wheelOpenSlide: CGFloat = 10
     static let wheelHoldSeconds: CFTimeInterval = 0.3
     private let tauntWheel = UT99RadialWheelView()
+    private let weaponWheel = UT99RadialWheelView()
+    /// The wheel button being touched (TAUNT or NEXT WPN).
+    private var wheelAction: Action?
+    /// A weapon picked on NEXT WPN's wheel: its class, for getweapon.
+    var onWeapon: ((String) -> Void)?
     static let cameraSelfieHold: CFTimeInterval = 0.5
     static let cameraBurstSlide: CGFloat = 20
     private enum CameraGesture { case idle, pending, burst, selfie }
@@ -561,6 +694,21 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             self.onTaunt?(command)
         }
         addSubview(tauntWheel)
+        weaponWheel.items = UT99WeaponArt.weapons.map {
+            UT99RadialWheelView.Item(title: $0.title, icon: UT99WeaponArt.icon(for: $0.id))
+        }
+        weaponWheel.title = "WEAPON"
+        weaponWheel.tapHint = "tap a weapon"
+        weaponWheel.slideHint = "slide toward a weapon"
+        weaponWheel.onFinish = { [weak self] index in
+            guard let self, let index else { return }
+            self.onWeapon?(UT99WeaponArt.weapons[index].className)
+        }
+        addSubview(weaponWheel)
+    }
+
+    private func wheel(for action: Action) -> UT99RadialWheelView {
+        action == .nextWeapon ? weaponWheel : tauntWheel
     }
 
     // MARK: CAMERA (JK's gestures, without Action Freeze)
@@ -632,12 +780,14 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     // MARK: Taunt wheel button (house wheel gestures)
 
     @objc private func wheelTouchBegan(_ sender: UIButton, forEvent event: UIEvent) {
-        guard !editingLayout, !menuInteractionActive, !tauntWheel.isOpen,
+        guard !editingLayout, !menuInteractionActive, !tauntWheel.isOpen, !weaponWheel.isOpen,
               let touch = event.touches(for: sender)?.first,
-              let button = sender as? UT99TouchActionButton else { return }
+              let button = sender as? UT99TouchActionButton,
+              let action = action(for: sender.tag) else { return }
+        wheelAction = action
         wheelOrigin = touch.location(in: self)
         wheelDownTime = CACurrentMediaTime()
-        updateAppearance(of: button, for: .taunt, pressed: true)
+        updateAppearance(of: button, for: action, pressed: true)
         wheelLink?.invalidate()
         let link = CADisplayLink(target: self, selector: #selector(wheelHoldTick))
         link.add(to: .main, forMode: .common)
@@ -645,10 +795,10 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func wheelHoldTick() {
-        guard wheelOrigin != nil, !tauntWheel.isOpen,
+        guard wheelOrigin != nil, let action = wheelAction, !wheel(for: action).isOpen,
               CACurrentMediaTime() - wheelDownTime >= Self.wheelHoldSeconds else { return }
         stopWheelTimer()
-        tauntWheel.open(tapMode: true)
+        wheel(for: action).open(tapMode: true)
     }
 
     private func stopWheelTimer() {
@@ -657,33 +807,49 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func wheelTouchMoved(_ sender: UIButton, forEvent event: UIEvent) {
-        guard let origin = wheelOrigin, let touch = event.touches(for: sender)?.first else { return }
+        guard let origin = wheelOrigin, let action = wheelAction,
+              let touch = event.touches(for: sender)?.first else { return }
         let point = touch.location(in: self)
-        if !tauntWheel.isOpen, hypot(point.x - origin.x, point.y - origin.y) >= Self.wheelOpenSlide {
+        let target = wheel(for: action)
+        if !target.isOpen, hypot(point.x - origin.x, point.y - origin.y) >= Self.wheelOpenSlide {
             stopWheelTimer()
-            tauntWheel.open(tapMode: false)
+            target.open(tapMode: false)
         }
-        if tauntWheel.isOpen && !tauntWheel.tapMode { tauntWheel.track(from: origin, to: point) }
+        if target.isOpen && !target.tapMode { target.track(from: origin, to: point) }
     }
 
     @objc private func wheelTouchEnded(_ sender: UIButton, forEvent event: UIEvent) {
         stopWheelTimer()
-        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: .taunt, pressed: false) }
-        defer { wheelOrigin = nil }
+        let action = wheelAction ?? .taunt
+        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: action, pressed: false) }
+        defer {
+            wheelOrigin = nil
+            wheelAction = nil
+        }
         guard wheelOrigin != nil else { return }
-        if tauntWheel.isOpen && !tauntWheel.tapMode {
-            tauntWheel.close(picking: tauntWheel.highlighted)
-        } else if !tauntWheel.isOpen {
-            // A quick tap opens the wheel to tap.
-            tauntWheel.open(tapMode: true)
+        let target = wheel(for: action)
+        if target.isOpen && !target.tapMode {
+            target.close(picking: target.highlighted)
+        } else if !target.isOpen {
+            if action == .nextWeapon {
+                // A quick tap on NEXT WPN is one next weapon (house standard).
+                onAction?(.nextWeapon, true)
+                onAction?(.nextWeapon, false)
+            } else {
+                // A quick tap on TAUNT opens its wheel to tap.
+                target.open(tapMode: true)
+            }
         }
     }
 
     @objc private func wheelTouchCancelled(_ sender: UIButton) {
         stopWheelTimer()
-        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: .taunt, pressed: false) }
+        let action = wheelAction ?? .taunt
+        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: action, pressed: false) }
         wheelOrigin = nil
-        if tauntWheel.isOpen && !tauntWheel.tapMode { tauntWheel.close(picking: nil) }
+        wheelAction = nil
+        let target = wheel(for: action)
+        if target.isOpen && !target.tapMode { target.close(picking: nil) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -701,6 +867,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         let size = bounds.size
         guard size.width > 0, size.height > 0 else { return }
         tauntWheel.frame = bounds
+        weaponWheel.frame = bounds
 
         if traitCollection.userInterfaceIdiom != .pad || size.height < 500 {
             layoutPhoneControls(in: size)
@@ -968,7 +1135,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                                  for: [.touchDragInside, .touchDragOutside])
                 button.addTarget(self, action: #selector(cameraTouchEnded(_:)),
                                  for: [.touchUpInside, .touchUpOutside, .touchCancel])
-            } else if action == .taunt {
+            } else if action == .taunt || action == .nextWeapon {
                 // TAUNT: slide 10 pt to open the wheel at once and lift on a
                 // taunt; a tap or a 0.3 s hold opens it to tap (house wheel).
                 button.addTarget(self, action: #selector(wheelTouchBegan(_:forEvent:)), for: .touchDown)
@@ -1307,6 +1474,52 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         savePlacements()
         setNeedsLayout()
         NSLog("UT99 touch Bunny Track layout applied hidden=%lu", touchConfiguration.hiddenActions.count)
+    }
+
+    /// The DM (Standard) layout: the house right-thumb cluster (a big FIRE in
+    /// the corner, ALT to its left, JUMP up-left, DUCK above it) and NEXT WPN
+    /// first on the top row, where its weapon wheel opens.
+    func applyDeathmatchLayout() {
+        releaseActiveInputs()
+        placements.removeAll()
+        touchConfiguration = touchConfiguration.applyingDeathmatchPreset()
+        touchConfiguration.save()
+        refreshActionTitles()
+        setNeedsLayout()
+        layoutIfNeeded()
+        _ = placeDeathmatchButtons()
+        savePlacements()
+        setNeedsLayout()
+        NSLog("UT99 touch DM layout applied")
+    }
+
+    @discardableResult
+    func placeDeathmatchButtons() -> Bool {
+        guard bounds.width > 0, bounds.height > 0 else { return false }
+        let safe = bounds.inset(by: safeAreaInsets)
+        let frames = referenceFrames()
+        let k = min(1.3, max(0.8, safe.height / 400)) * touchProfile.scale * globalScale
+        let leftHanded = touchConfiguration.leftHanded
+        func place(_ action: Action, fromRight: CGFloat, up: CGFloat, diameter: CGFloat) {
+            guard let base = frames[action.rawValue]?.width, base > 0 else { return }
+            let x = leftHanded ? safe.minX + fromRight * k : safe.maxX - fromRight * k
+            placements[action.rawValue] = UT99TouchPlacement(
+                x: x / bounds.width, y: (safe.maxY - up * k) / bounds.height,
+                scale: diameter * k / base)
+        }
+        place(.primaryFire, fromRight: 70, up: 72, diameter: 84)
+        place(.alternateFire, fromRight: 176, up: 52, diameter: 56)
+        place(.jump, fromRight: 160, up: 140, diameter: 62)
+        place(.crouch, fromRight: 70, up: 178, diameter: 58)
+        // NEXT WPN in CUSTOM's top-left slot (CUSTOM is hidden here).
+        if let slot = frames[Action.customCommand.rawValue], let base = frames[Action.nextWeapon.rawValue]?.width,
+           base > 0 {
+            placements[Action.nextWeapon.rawValue] = UT99TouchPlacement(
+                x: slot.midX / bounds.width, y: slot.midY / bounds.height, scale: slot.width / base)
+        }
+        savePlacements()
+        setNeedsLayout()
+        return true
     }
 
     /// The frames the current device class lays out from (before placements).
@@ -2012,7 +2225,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         finishHold(cancelled: true)
         stopWheelTimer()
         wheelOrigin = nil
+        wheelAction = nil
         tauntWheel.close(picking: nil)
+        weaponWheel.close(picking: nil)
         if cameraGesture == .burst { onCameraBurst?(false) }
         cameraGesture = .idle
         cameraLink?.invalidate()
@@ -2054,7 +2269,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .dodge: "DODGE"
         case .walk: "WALK"
         case .customCommand: "CUSTOM"
-        case .nextWeapon: "WPN +"
+        case .nextWeapon: "NEXT\nWPN"
         case .previousWeapon: "WPN −"
         case .scoreboard: "SCORE"
         case .pause: "MENU"

@@ -1262,6 +1262,9 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             self.engineBridge.publishTouchAction(action, pressed: pressed)
             if action == .pause && !pressed { self.followMenuButtonTap() }
         }
+        touchOverlay.onWeapon = { [weak self] className in
+            self?.engineBridge.publishConsoleCommand("getweapon \(className)")
+        }
         touchOverlay.onTaunt = { [weak self] command in
             self?.engineBridge.publishTouchCommand(command)
         }
@@ -3990,6 +3993,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         customVisible.addTarget(self, action: #selector(touchCustomVisibleChanged(_:)), for: .valueChanged)
 
         let bunnyTrack = touchSettingsButton("Apply BT Layout", symbol: "hare.fill", selector: #selector(applyBunnyTrackLayoutFromSettings))
+        let deathmatch = touchSettingsButton("Apply DM Layout", symbol: "scope", selector: #selector(applyDeathmatchLayoutFromSettings))
         let customCommand = touchSettingsButton(
             "CUSTOM command: \(dodgeConfiguration.customCommand.isEmpty ? "none" : dodgeConfiguration.customCommand)",
             symbol: "terminal",
@@ -4009,6 +4013,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             touchSettingsRow(title: "Invert vertical look", control: invertLook),
             touchSettingsSection("BUNNY TRACK"),
             bunnyTrack,
+            deathmatch,
             touchSettingsRow(title: "◀ DODGE / DODGE ▶ buttons", control: fireButtonsDodge),
             touchSettingsRow(title: "WALK button", control: walkVisible),
             touchSettingsRow(title: "CUSTOM button", control: customVisible),
@@ -4250,6 +4255,19 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         touchOverlay.setAction(.customCommand, visible: sender.isOn)
     }
 
+    @objc private func applyDeathmatchLayoutFromSettings() {
+        if activeTouchProfileName != UT99TouchProfileName.standard {
+            switchTouchProfile(to: UT99TouchProfileName.standard)
+        }
+        touchOverlay.applyDeathmatchLayout()
+        if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.standard) {
+            _ = try? UT99TouchProfileStore.upsert(saved)
+        }
+        statusLabel.text = "DM layout applied"
+        refreshHostMenu()
+        showTouchSettings()
+    }
+
     @objc private func applyBunnyTrackLayoutFromSettings() {
         applyBunnyTrackProfilePreset()
         statusLabel.text = "Bunny Track layout applied"
@@ -4343,7 +4361,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     @objc private func resetTouchLayoutFromSettings() {
-        touchOverlay.resetTouchLayout()
+        restoreProfileLayout()
         statusLabel.text = "Touch layout restored"
         touchOpacitySlider?.value = Float(touchOverlay.touchOpacity)
         touchScaleSlider?.value = Float(touchOverlay.globalScale)
@@ -4652,8 +4670,24 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     @objc private func resetTouchLayout() {
-        touchOverlay.resetTouchLayout()
+        restoreProfileLayout()
         statusLabel.text = "Touch layout restored"
+    }
+
+    /// Restore Default Layout: the active profile's own layout (BT or DM),
+    /// with the default look settings, not the old reference layout.
+    private func restoreProfileLayout() {
+        touchOverlay.resetTouchLayout()
+        if activeTouchProfileName == UT99TouchProfileName.bunnyTrack {
+            touchOverlay.applyBunnyTrackLayout()
+        } else {
+            touchOverlay.applyDeathmatchLayout()
+        }
+        touchOverlay.setTouchOpacity(1)
+        applyOneTimeProfileMigrations()
+        if let saved = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+            _ = try? UT99TouchProfileStore.upsert(saved)
+        }
     }
 
     /// Deterministic diagnostic for the host/menu state machine. This does
@@ -6061,7 +6095,8 @@ extension GameViewController: UITextFieldDelegate {
         updateTouchFirstChrome()
         updateFPSReadout(now: now)
         showPendingToast()
-        if !UserDefaults.standard.bool(forKey: Self.bunnyTrackPlacementMigrationKey) {
+        if !UserDefaults.standard.bool(forKey: Self.bunnyTrackPlacementMigrationKey) ||
+            !UserDefaults.standard.bool(forKey: "ut99.touch.migration.dmLayout.v1") {
             applyOneTimeProfileMigrations()
         }
         if hostState == .running {
@@ -6351,7 +6386,7 @@ extension GameViewController: UITextFieldDelegate {
         } else if name == UT99TouchProfileName.bunnyTrack {
             touchOverlay.applyBunnyTrackLayout()
         } else {
-            touchOverlay.resetTouchLayout()
+            touchOverlay.applyDeathmatchLayout()
         }
         UserDefaults.standard.set(name, forKey: Self.activeTouchProfileKey)
         applyOneTimeProfileMigrations()
@@ -6407,6 +6442,17 @@ extension GameViewController: UITextFieldDelegate {
             touchOverlay.setAction(.checkpoint, visible: false)
             touchOverlay.setAction(.noCheckpoint, visible: false)
             if let saved = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+                _ = try? UT99TouchProfileStore.upsert(saved)
+            }
+        }
+        // The Standard profile becomes the DM layout (house cluster, NEXT WPN
+        // with its weapon wheel). Needs a laid-out overlay, like the BT move.
+        let dmKey = "ut99.touch.migration.dmLayout.v1"
+        if activeTouchProfileName == UT99TouchProfileName.standard, !defaults.bool(forKey: dmKey),
+           !touchOverlay.editingLayout, touchOverlay.placeDeathmatchButtons() {
+            defaults.set(true, forKey: dmKey)
+            touchOverlay.applyDeathmatchLayout()
+            if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.standard) {
                 _ = try? UT99TouchProfileStore.upsert(saved)
             }
         }

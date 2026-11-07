@@ -1529,9 +1529,15 @@ final class UT99EngineBridge {
     private func submitConsoleCommand(_ command: String) {
         pushKey(key: 9, pressed: true) // Tab=Type in the staged stock User.ini.
         pushKey(key: 9, pressed: false)
-        for byte in command.utf8 where byte >= 0x20 && byte <= 0x7e {
-            pushKey(key: Int32(byte), pressed: true)
-            pushKey(key: Int32(byte), pressed: false)
+        // The characters go through SDL's real keyboard text path (the one
+        // UWindow edit boxes need), so shifted characters such as '!' and '|'
+        // arrive intact; plain key events are the fallback.
+        let printable = String(command.unicodeScalars.filter { $0.value >= 0x20 && $0.value <= 0x7e })
+        if !publishTextEntry(printable) {
+            for byte in printable.utf8 {
+                pushKey(key: Int32(byte), pressed: true)
+                pushKey(key: Int32(byte), pressed: false)
+            }
         }
         pushKey(key: 13, pressed: true)
         pushKey(key: 13, pressed: false)

@@ -14,6 +14,13 @@ struct UT99TouchConfiguration: Codable, Equatable {
     static let bunnyTrackHiddenActions: Set<String> = [
         "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "cheat"
     ]
+    /// The DM (Standard) layout: FIRE, ALT, JUMP and DUCK on the right thumb,
+    /// NEXT WPN with its weapon wheel on the top row; no dodge buttons, no
+    /// d-pad and no checkpoint pair.
+    static let deathmatchHiddenActions: Set<String> = [
+        "leftPrimaryFire", "use", "previousWeapon", "scoreboard", "customCommand", "dodge", "dodgeForward",
+        "walk", "checkpoint", "noCheckpoint", "cheat"
+    ]
     /// Bunny Track's checkpoint pair; other profiles hide it.
     static let bunnyTrackOnlyActions: Set<String> = ["checkpoint", "noCheckpoint"]
     static let defaultCustomCommand = "suicide"
@@ -258,6 +265,14 @@ struct UT99TouchConfiguration: Codable, Equatable {
     /// precise lines, and dodge with buttons: ALT is ◀ DODGE, the DODGE
     /// button is DODGE ▶, and FIRE (right thumb) still shoots, to join the
     /// game and hit the targets some BT maps use. No look-side flick.
+    func applyingDeathmatchPreset() -> UT99TouchConfiguration {
+        var result = self
+        result.hiddenActions = Self.deathmatchHiddenActions
+        result.flickDodgeEnabled = false
+        result.fireButtonsDodge = false
+        return result.sanitized()
+    }
+
     func applyingBunnyTrackPreset() -> UT99TouchConfiguration {
         var result = self
         result.hiddenActions = Self.bunnyTrackHiddenActions
