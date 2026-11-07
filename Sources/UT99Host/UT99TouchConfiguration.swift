@@ -5,13 +5,14 @@ struct UT99TouchConfiguration: Codable, Equatable {
     static let supportedActionIDs: Set<String> = [
         "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
         "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward",
-        "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt"
+        "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt",
+        "camera", "view", "cheat"
     ]
     /// Controls the Bunny Track layout hides: combat and inventory buttons a
     /// trick-jump run never needs (BT servers give the shock rifle only, so
     /// no weapon switching), and CUSTOM, which the top row's SUICIDE replaces.
     static let bunnyTrackHiddenActions: Set<String> = [
-        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "customCommand"
+        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "cheat"
     ]
     /// Bunny Track's checkpoint pair; other profiles hide it.
     static let bunnyTrackOnlyActions: Set<String> = ["checkpoint", "noCheckpoint"]
@@ -96,7 +97,7 @@ struct UT99TouchConfiguration: Codable, Equatable {
         // The look-side flick replaces the DODGE pad, and WALK and CUSTOM are
         // Bunny Track tools; the BT layout turns the last two on.
         hiddenActions: ["scoreboard", "dodge", "walk", "customCommand", "dodgeForward",
-                        "checkpoint", "noCheckpoint"],
+                        "checkpoint", "noCheckpoint", "cheat"],
         lookAcceleration: 0.45,
         lookDeadZone: 0.00025,
         movementDeadZone: 0.04,
@@ -166,6 +167,12 @@ struct UT99TouchConfiguration: Codable, Equatable {
         if !defaults.bool(forKey: topRowMigrationKey) {
             configuration.hiddenActions.formUnion(bunnyTrackOnlyActions)
             defaults.set(true, forKey: topRowMigrationKey)
+        }
+        // The CHEAT emblem shows only while the cheat is on (the host shows it).
+        let cheatMigrationKey = "ut99.touch.migration.cheatEmblem.v1"
+        if !defaults.bool(forKey: cheatMigrationKey) {
+            configuration.hiddenActions.insert("cheat")
+            defaults.set(true, forKey: cheatMigrationKey)
         }
         // ▲ DODGE is new; it starts hidden and the Bunny Track profile shows it.
         let forwardDodgeMigrationKey = "ut99.touch.migration.forwardDodge.v1"
@@ -291,6 +298,11 @@ enum UT99TouchCommand: String, CaseIterable {
     case checkpoint, noCheckpoint, suicide, mapVote, teamRed, teamBlue
     case tauntWave, tauntVictory, tauntTaunt, tauntThrust
     case voice0, voice1, voice2, voice3
+    /// VIEW's third and first person (servers may not allow third person).
+    case viewThird, viewFirst
+    /// CHEAT, offline games only: invincibility, every weapon, full ammo; off
+    /// toggles invincibility back (UT's god is a toggle).
+    case cheatOn, cheatOff
 
     var command: String {
         switch self {
@@ -308,6 +320,10 @@ enum UT99TouchCommand: String, CaseIterable {
         case .voice1: "speech 4 1 0"
         case .voice2: "speech 4 2 0"
         case .voice3: "speech 4 3 0"
+        case .viewThird: "behindview 1"
+        case .viewFirst: "behindview 0"
+        case .cheatOn: "god | loaded | allammo"
+        case .cheatOff: "god"
         }
     }
 
@@ -328,6 +344,10 @@ enum UT99TouchCommand: String, CaseIterable {
         case .voice1: "GreyStar"
         case .voice2: "GreyMinus"
         case .voice3: "GreyPlus"
+        case .viewThird: "NumPadPeriod"
+        case .viewFirst: "ScrollLock"
+        case .cheatOn: "Pause"
+        case .cheatOff: "PrintScrn"
         }
     }
 
@@ -349,6 +369,10 @@ enum UT99TouchCommand: String, CaseIterable {
         case .voice1: 85
         case .voice2: 86
         case .voice3: 87
+        case .viewThird: 99
+        case .viewFirst: 71
+        case .cheatOn: 72
+        case .cheatOff: 70
         }
     }
 }

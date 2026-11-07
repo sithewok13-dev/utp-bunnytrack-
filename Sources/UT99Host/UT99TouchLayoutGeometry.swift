@@ -190,6 +190,9 @@ enum UT99EctoPadReferenceLayout {
             frame("suicide", 0.7200000000, 0.1050000000, 62, 62),
             frame("team", 0.7800000000, 0.1050000000, 62, 62),
             frame("mapVote", 0.8400000000, 0.1050000000, 62, 62),
+            frame("cheat", 0.4100000000, 0.1050000000, 62, 62),
+            frame("camera", 0.4700000000, 0.1050000000, 62, 62),
+            frame("view", 0.5300000000, 0.1050000000, 62, 62),
             // UT has four low-frequency utility actions that map cleanly to
             // EctoPad's four-direction pad. Weapon cycling belongs on left /
             // right—not on the reference controller's giant analog trigger.
@@ -279,6 +282,10 @@ enum UT99EctoPadReferenceLayout {
             "taunt": topButton(centerX: tauntX),
             "checkpoint": topButton(centerX: tauntX + step),
             "noCheckpoint": topButton(centerX: tauntX + step * 2),
+            // CAMERA and VIEW in the middle (as JK), the CHEAT emblem left of them.
+            "cheat": topButton(centerX: safeRect.midX - step * 1.5),
+            "camera": topButton(centerX: safeRect.midX - step * 0.5),
+            "view": topButton(centerX: safeRect.midX + step * 0.5),
             "scoreboard": CGRect(x: dCenter.x - d / 2, y: dCenter.y - d * 1.5, width: d, height: d),
             "use": CGRect(x: dCenter.x - d / 2, y: dCenter.y + d * 0.5, width: d, height: d),
             "previousWeapon": CGRect(x: dCenter.x - d * 1.5, y: dCenter.y - d / 2, width: d, height: d),

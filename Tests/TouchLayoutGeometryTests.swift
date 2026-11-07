@@ -16,6 +16,7 @@ private let actionIDs: Set<String> = [
     "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
     "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward",
     "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt",
+    "camera", "view", "cheat",
 ]
 
 private func verifyContained(_ frames: [String: CGRect], in safe: CGRect, name: String) {
@@ -160,7 +161,8 @@ for key in ["walk", "customCommand"] {
 require(phone["leftPrimaryFire"]!.midX < phoneSafe.midX, "phone duplicate FIRE left the movement side")
 require(!phone["dodge"]!.intersects(phone["jump"]!), "phone DODGE overlaps JUMP")
 // The top row (house standard): small buttons that overlap nothing.
-let topRow = ["pause", "mapVote", "team", "suicide", "taunt", "checkpoint", "noCheckpoint"]
+let topRow = ["pause", "mapVote", "team", "suicide", "taunt", "checkpoint", "noCheckpoint",
+              "camera", "view", "cheat"]
 for (name, frames, safe) in [("iPhone", phone, phoneSafe), ("iPad", tablet, tabletSafe)] {
     for key in topRow {
         require(frames[key]!.midY - safe.minY < safe.height * 0.2, "\(name) \(key) left the top row")

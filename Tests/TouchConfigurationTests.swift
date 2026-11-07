@@ -201,6 +201,9 @@ private enum TouchConfigurationTests {
         require(!preset.hiddenActions.contains("dodgeForward") &&
                 UT99TouchConfiguration.standard.hiddenActions.contains("dodgeForward"),
                 "▲ DODGE belongs to the BT layout only")
+        require(preset.hiddenActions.contains("cheat") && UT99TouchConfiguration.standard.hiddenActions.contains("cheat") &&
+                !preset.hiddenActions.contains("camera") && !preset.hiddenActions.contains("view"),
+                "CAMERA and VIEW show; the CHEAT emblem starts hidden")
         require(UT99TouchConfiguration.standard.hiddenActions.isSuperset(of: UT99TouchConfiguration.bunnyTrackOnlyActions) &&
                 UT99TouchConfiguration.standard.hiddenActions.isDisjoint(with: ["suicide", "mapVote", "team", "taunt"]),
                 "Standard shows SUICIDE, MAP VOTE, TEAM and TAUNT but not the checkpoint pair")

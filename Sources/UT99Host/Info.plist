@@ -19,6 +19,7 @@
 	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
 	<key>UIFileSharingEnabled</key><true/>
+	<key>NSPhotoLibraryAddUsageDescription</key><string>CAMERA saves your Unreal Tournament photos to your photo library.</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>

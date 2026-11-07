@@ -5,6 +5,8 @@ import CryptoKit
 import UniformTypeIdentifiers
 import GameController
 import AVFAudio
+import AudioToolbox
+import Photos
 import Network
 import Darwin
 import SafariServices
@@ -736,6 +738,21 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     /// FPS readout (tray's FPS), left of the top row's right-hand buttons.
     fileprivate let fpsLabel = UILabel()
     fileprivate var fpsSample: (frames: UInt64, at: CFTimeInterval)?
+    /// CAMERA: timed steps (selfies, bursts) run from a display link, since
+    /// the engine's main loop does not drain the main queue.
+    fileprivate var cameraSteps: [(at: CFTimeInterval, run: () -> Void)] = []
+    fileprivate var cameraStepLink: CADisplayLink?
+    fileprivate var burstShots = 0
+    fileprivate var burstNext: CFTimeInterval = 0
+    fileprivate var burstActive = false
+    fileprivate let burstLabel = UILabel()
+    /// Messages from background completions, shown by the watch tick.
+    fileprivate let pendingToastLock = NSLock()
+    fileprivate var pendingToast: String?
+    fileprivate var photosSavedSinceToast = 0
+    /// A server was joined since the last title screen (cheats are offline only).
+    fileprivate var engineInOnlineGame = false
+    fileprivate var cheatPlayer: AVAudioPlayer?
     fileprivate var lastEngineLogScan: CFTimeInterval = 0
     fileprivate var lastViewportGameplayCapture: Bool?
     fileprivate var engineLogOffsets: [String: UInt64] = [:]
@@ -1248,6 +1265,9 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         touchOverlay.onTaunt = { [weak self] command in
             self?.engineBridge.publishTouchCommand(command)
         }
+        touchOverlay.onCameraPhoto = { [weak self] in self?.takePhoto() }
+        touchOverlay.onCameraBurst = { [weak self] active in self?.setBurst(active) }
+        touchOverlay.onCameraSelfie = { [weak self] in self?.takeSelfie() }
         touchOverlay.onDodge = { [weak self] direction, undoLook in
             guard let self, !self.originalMenuInputActive else { return }
             NSLog("UT99 touch dodge direction=%@ undoLook=%@", direction.rawValue, undoLook ? "true" : "false")
@@ -5343,6 +5363,8 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         // UIWindow from stealing UIKit's key-event routing after startup.
         engineWindow.isUserInteractionEnabled = false
         engineWindow.resignKey()
+        // CAMERA copies presented frames: the drawables must be readable.
+        Self.allowFrameReads(in: engineWindow)
         view.backgroundColor = .clear
         backdropLayer.isHidden = true
         for subview in view.subviews where subview !== gameView &&
@@ -6038,6 +6060,7 @@ extension GameViewController: UITextFieldDelegate {
         if isEngineActive { keepHostWindowAboveEngine() }
         updateTouchFirstChrome()
         updateFPSReadout(now: now)
+        showPendingToast()
         if !UserDefaults.standard.bool(forKey: Self.bunnyTrackPlacementMigrationKey) {
             applyOneTimeProfileMigrations()
         }
@@ -6204,6 +6227,7 @@ extension GameViewController: UITextFieldDelegate {
         switch event {
         case let .server(address):
             lastJoinedServer = (address, CACurrentMediaTime())
+            engineInOnlineGame = true
             UT99RecentServer.save(UT99RecentServer.recording(address, map: nil, in: UT99RecentServer.load()))
             NSLog("UT99 engine log server joined")
         case let .map(map):
@@ -6214,6 +6238,8 @@ extension GameViewController: UITextFieldDelegate {
             }
             NSLog("UT99 engine log map=%@", map)
             engineInPlayableMap = true
+            // Third person and the cheat end with the map; put them back.
+            scheduleCameraStep(after: 3) { [weak self] in self?.reapplyViewAndCheat() }
             // Learn UT's window state without the player's help: a few
             // seconds into a map is play (if the host still says so then).
             if pendingViewportSample == nil {
@@ -6238,6 +6264,7 @@ extension GameViewController: UITextFieldDelegate {
         case .titleMap:
             // Disconnected or back at the title: UT's menu is up.
             engineInPlayableMap = false
+            engineInOnlineGame = false
             NSLog("UT99 engine log title map")
             // The title shows UT's menu: a menu sample once it is up.
             pendingViewportSample = (true, CACurrentMediaTime() + 2.5)
@@ -6271,6 +6298,14 @@ extension GameViewController: UITextFieldDelegate {
             command = Self.nextTeamIsBlue ? .teamBlue : .teamRed
             showHostToast(Self.nextTeamIsBlue ? "Switching to BLUE" : "Switching to RED")
             Self.nextTeamIsBlue.toggle()
+        case .view:
+            let third = !UserDefaults.standard.bool(forKey: Self.thirdPersonKey)
+            UserDefaults.standard.set(third, forKey: Self.thirdPersonKey)
+            command = third ? .viewThird : .viewFirst
+            showHostToast(third ? "Third person" : "First person")
+        case .cheat:
+            setCheat(!UserDefaults.standard.bool(forKey: Self.cheatKey))
+            return
         default: return
         }
         engineBridge.publishTouchCommand(command)
@@ -6333,6 +6368,15 @@ extension GameViewController: UITextFieldDelegate {
     /// profile is active; the player can change any of it again afterwards.
     private func applyOneTimeProfileMigrations() {
         let defaults = UserDefaults.standard
+        // Not per profile: the CHEAT emblem follows the cheat, CAMERA and
+        // VIEW follow the tray's camera switch, whatever a profile saved.
+        let cheatOn = defaults.bool(forKey: Self.cheatKey)
+        if touchOverlay.isActionVisible(.cheat) != cheatOn { touchOverlay.setAction(.cheat, visible: cheatOn) }
+        let cameraShown = !defaults.bool(forKey: Self.cameraButtonsKey)
+        for action: GoldenPadTouchOverlay.Action in [.camera, .view]
+        where touchOverlay.isActionVisible(action) != cameraShown {
+            touchOverlay.setAction(action, visible: cameraShown)
+        }
         // The look-side flick caught ordinary quick look swipes as dodges and
         // then ignored the rest of that touch, so the camera seemed dead.
         let noFlickKey = "ut99.touch.migration.noFlick.v1.\(activeTouchProfileName)"
@@ -6470,6 +6514,10 @@ extension GameViewController: UITextFieldDelegate {
             ("FPS\n\(showFPS ? "ON" : "OFF")", nil, false, {
                 UserDefaults.standard.set(!showFPS, forKey: Self.showFPSKey)
             }),
+            ("", "camera.fill", true, { [weak self] in self?.toggleCameraButtons() }),
+            ("CHEAT\n\(UserDefaults.standard.bool(forKey: Self.cheatKey) ? "ON" : "OFF")", nil, true, { [weak self] in
+                self?.setCheat(!UserDefaults.standard.bool(forKey: Self.cheatKey))
+            }),
             ("", "keyboard", false, { [weak self] in self?.toggleMenuTextKeyboard() }),
             ("CON-\nSOLE", nil, false, { [weak self] in self?.showConsoleBar() }),
             ("SERV-\nERS", nil, false, { [weak self] in self?.showRecentServers() }),
@@ -6498,8 +6546,8 @@ extension GameViewController: UITextFieldDelegate {
             if let symbol = item.symbol {
                 button.setImage(UIImage(systemName: symbol, withConfiguration:
                     UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)), for: .normal)
-                button.tintColor = UIColor(white: 1, alpha: 0.85)
-                button.accessibilityLabel = "Keyboard"
+                button.tintColor = UIColor(white: 1, alpha: symbol == "camera.fill" && !cameraButtonsShown ? 0.4 : 0.85)
+                button.accessibilityLabel = symbol == "camera.fill" ? "Camera buttons" : "Keyboard"
             } else {
                 button.setTitle(item.title, for: .normal)
                 button.accessibilityLabel = item.title.replacingOccurrences(of: "\n", with: " ")
@@ -6852,5 +6900,279 @@ private extension NSLayoutConstraint {
     func withPriority(_ priority: UILayoutPriority) -> NSLayoutConstraint {
         self.priority = priority
         return self
+    }
+}
+
+
+// MARK: CAMERA and CHEAT
+
+extension GameViewController {
+    static let thirdPersonKey = "ut99.camera.thirdPerson"
+    static let cameraButtonsKey = "ut99.camera.buttonsHidden"
+    static let cheatKey = "ut99.cheat.on"
+    static let selfieShots = 3
+    static let burstGap: CFTimeInterval = 0.2
+    static let burstMax = 10
+
+    fileprivate var cameraButtonsShown: Bool { !UserDefaults.standard.bool(forKey: Self.cameraButtonsKey) }
+
+    /// SDL's CAMetalLayer is framebuffer-only by default; CAMERA reads frames.
+    static func allowFrameReads(in view: UIView) {
+        if let metal = view.layer as? CAMetalLayer, metal.framebufferOnly {
+            metal.framebufferOnly = false
+            NSLog("UT99 camera: drawables made readable")
+        }
+        for subview in view.subviews { allowFrameReads(in: subview) }
+    }
+
+    fileprivate func scheduleCameraStep(after delay: CFTimeInterval, _ run: @escaping () -> Void) {
+        cameraSteps.append((CACurrentMediaTime() + delay, run))
+        guard cameraStepLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(cameraStepTick))
+        link.add(to: .main, forMode: .common)
+        cameraStepLink = link
+    }
+
+    @objc fileprivate func cameraStepTick() {
+        let now = CACurrentMediaTime()
+        if burstActive && now >= burstNext {
+            if burstShots < Self.burstMax {
+                burstShots += 1
+                burstNext = now + Self.burstGap
+                capturePhoto(flash: false)
+                AudioServicesPlaySystemSound(1104) // a quick tick per burst photo
+                burstLabel.text = "\(burstShots)"
+            } else {
+                setBurst(false)
+            }
+        }
+        let due = cameraSteps.filter { $0.at <= now }
+        cameraSteps.removeAll { $0.at <= now }
+        due.forEach { $0.run() }
+        if cameraSteps.isEmpty && !burstActive {
+            cameraStepLink?.invalidate()
+            cameraStepLink = nil
+        }
+    }
+
+    // MARK: Photos
+
+    fileprivate func takePhoto() {
+        capturePhoto(flash: true)
+    }
+
+    /// A white flash and the shutter (JK's CAMERA), then the next presented
+    /// frame goes to Photos.
+    fileprivate func capturePhoto(flash: Bool) {
+        if flash {
+            AudioServicesPlaySystemSound(1108)
+            let white = UIView(frame: view.bounds)
+            white.backgroundColor = .white
+            white.alpha = 0.85
+            white.isUserInteractionEnabled = false
+            white.tag = Self.touchFirstChromeTag
+            view.addSubview(white)
+            UIView.animate(withDuration: 0.35, animations: { white.alpha = 0 }) { _ in white.removeFromSuperview() }
+        }
+        let accepted = engineBridge.requestFrameCapture { [weak self] image in
+            guard let self else { return }
+            guard let image else {
+                self.queueToast("Couldn't take the photo")
+                return
+            }
+            self.saveToPhotos(UIImage(cgImage: image))
+        }
+        if !accepted { NSLog("UT99 camera: capture busy or unavailable") }
+    }
+
+    fileprivate func saveToPhotos(_ image: UIImage) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+            guard status == .authorized || status == .limited else {
+                self?.queueToast("Allow Photos access in Settings to save photos")
+                return
+            }
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }) { [weak self] ok, error in
+                guard let self else { return }
+                if ok {
+                    self.pendingToastLock.lock()
+                    self.photosSavedSinceToast += 1
+                    let count = self.photosSavedSinceToast
+                    self.pendingToast = count == 1 ? "1 photo saved" : "\(count) photos saved"
+                    self.pendingToastLock.unlock()
+                } else {
+                    NSLog("UT99 camera: save failed %@", error?.localizedDescription ?? "unknown")
+                    self.queueToast("Couldn't save the photo")
+                }
+            }
+        }
+    }
+
+    fileprivate func queueToast(_ text: String) {
+        pendingToastLock.lock()
+        pendingToast = text
+        pendingToastLock.unlock()
+    }
+
+    /// Run on the watch tick (main thread): background completions cannot
+    /// reach the main queue while the engine owns the main loop.
+    fileprivate func showPendingToast() {
+        pendingToastLock.lock()
+        let text = pendingToast
+        pendingToast = nil
+        if text != nil { photosSavedSinceToast = 0 }
+        pendingToastLock.unlock()
+        if let text { showHostToast(text) }
+    }
+
+    /// Slide off CAMERA sideways: a photo every 0.2 s while the finger stays
+    /// down, up to 10, with a tick and a counter beside the button.
+    fileprivate func setBurst(_ active: Bool) {
+        guard active != burstActive else { return }
+        burstActive = active
+        if active {
+            burstShots = 0
+            burstNext = CACurrentMediaTime()
+            let anchor = touchOverlay.buttonFrame(.camera) ?? CGRect(x: view.bounds.midX, y: 20, width: 44, height: 44)
+            burstLabel.frame = CGRect(x: anchor.maxX + 4, y: anchor.midY - 10, width: 30, height: 20)
+            burstLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .bold)
+            burstLabel.textColor = UIColor(red: 1, green: 0.85, blue: 0.3, alpha: 0.95)
+            burstLabel.text = ""
+            burstLabel.tag = Self.touchFirstChromeTag
+            view.addSubview(burstLabel)
+            scheduleCameraStep(after: 0) {}
+        } else {
+            burstLabel.removeFromSuperview()
+        }
+    }
+
+    /// Hold CAMERA: a selfie. UT can't pose other players, so the camera
+    /// swings to third person and your player taunts, three photos are
+    /// taken, and the view goes back.
+    fileprivate func takeSelfie() {
+        guard !originalMenuInputActive else { return }
+        engineBridge.publishTouchCommand(.viewThird)
+        engineBridge.publishTouchCommand([.tauntWave, .tauntVictory, .tauntTaunt].randomElement() ?? .tauntWave)
+        for shot in 0..<Self.selfieShots {
+            scheduleCameraStep(after: 0.9 + Double(shot) * 0.7) { [weak self] in self?.capturePhoto(flash: true) }
+        }
+        scheduleCameraStep(after: 0.9 + Double(Self.selfieShots) * 0.7) { [weak self] in
+            guard let self, !UserDefaults.standard.bool(forKey: Self.thirdPersonKey) else { return }
+            self.engineBridge.publishTouchCommand(.viewFirst)
+        }
+    }
+
+    fileprivate func toggleCameraButtons() {
+        let shown = !cameraButtonsShown
+        UserDefaults.standard.set(!shown, forKey: Self.cameraButtonsKey)
+        touchOverlay.setAction(.camera, visible: shown)
+        touchOverlay.setAction(.view, visible: shown)
+        showHostToast(shown ? "CAMERA and VIEW shown" : "CAMERA and VIEW hidden")
+    }
+
+    // MARK: CHEAT
+
+    /// The cheat: invincibility, every weapon and full ammo, in offline games
+    /// (servers refuse cheats). The CHEAT emblem shows on the top row while
+    /// it's on, with a burst of light and a power-up sound.
+    fileprivate func setCheat(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.cheatKey)
+        touchOverlay.setAction(.cheat, visible: on)
+        if engineInOnlineGame {
+            showHostToast(on ? "Cheats work in offline games only" : "Cheat off")
+            return
+        }
+        if engineInPlayableMap {
+            engineBridge.publishTouchCommand(on ? .cheatOn : .cheatOff)
+        }
+        showCheatEmblem(on: on)
+        playCheatSound(on: on)
+    }
+
+    fileprivate func reapplyViewAndCheat() {
+        guard engineInPlayableMap else { return }
+        if UserDefaults.standard.bool(forKey: Self.thirdPersonKey) { engineBridge.publishTouchCommand(.viewThird) }
+        if UserDefaults.standard.bool(forKey: Self.cheatKey) && !engineInOnlineGame {
+            engineBridge.publishTouchCommand(.cheatOn)
+        }
+    }
+
+    fileprivate func showCheatEmblem(on: Bool) {
+        let size: CGFloat = 150
+        let emblem = UIImageView(image: UIImage(systemName: on ? "bolt.shield.fill" : "shield.slash",
+                                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 110, weight: .bold)))
+        emblem.tintColor = on ? UIColor(red: 1, green: 0.78, blue: 0.25, alpha: 1) : UIColor(white: 0.85, alpha: 1)
+        emblem.contentMode = .scaleAspectFit
+        emblem.frame = CGRect(x: view.bounds.midX - size / 2, y: view.bounds.midY - size / 2 - 16, width: size, height: size)
+        emblem.layer.shadowColor = emblem.tintColor.cgColor
+        emblem.layer.shadowRadius = 24
+        emblem.layer.shadowOpacity = 0.9
+        emblem.layer.shadowOffset = .zero
+        let caption = UILabel(frame: CGRect(x: view.bounds.midX - 140, y: emblem.frame.maxY + 6, width: 280, height: 30))
+        caption.text = on ? "GOD MODE · ALL WEAPONS" : "CHEAT OFF"
+        caption.textAlignment = .center
+        caption.font = .systemFont(ofSize: 20, weight: .heavy)
+        caption.textColor = emblem.tintColor
+        caption.layer.shadowColor = UIColor.black.cgColor
+        caption.layer.shadowRadius = 4
+        caption.layer.shadowOpacity = 0.9
+        caption.layer.shadowOffset = .zero
+        for item in [emblem, caption] as [UIView] {
+            item.isUserInteractionEnabled = false
+            item.tag = Self.touchFirstChromeTag
+            item.alpha = 0
+            item.transform = CGAffineTransform(scaleX: 0.4, y: 0.4)
+            view.addSubview(item)
+        }
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.55, initialSpringVelocity: 0.8,
+                       options: [.allowUserInteraction]) {
+            emblem.alpha = 1
+            caption.alpha = 1
+            emblem.transform = .identity
+            caption.transform = .identity
+        } completion: { _ in
+            UIView.animate(withDuration: 0.5, delay: 0.9, options: [.allowUserInteraction]) {
+                emblem.alpha = 0
+                caption.alpha = 0
+                emblem.transform = CGAffineTransform(scaleX: 1.6, y: 1.6)
+            } completion: { _ in
+                emblem.removeFromSuperview()
+                caption.removeFromSuperview()
+            }
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(on ? .success : .warning)
+    }
+
+    /// A short synthesized power-up (rising) or power-down (falling) chord,
+    /// made here so the app carries no game audio.
+    fileprivate func playCheatSound(on: Bool) {
+        let rate = 44_100.0
+        let notes: [Double] = on ? [523.25, 659.25, 783.99, 1046.5] : [783.99, 659.25, 523.25, 392.0]
+        let noteLength = 0.11
+        let tail = 0.45
+        let total = Int(rate * (noteLength * Double(notes.count) + tail))
+        var samples = [Int16](repeating: 0, count: total)
+        for (index, frequency) in notes.enumerated() {
+            let start = Int(rate * noteLength * Double(index))
+            for n in start..<total {
+                let t = Double(n - start) / rate
+                let envelope = min(1, t * 80) * exp(-t * 5.5)
+                let tone = sin(2 * .pi * frequency * t) + 0.35 * sin(4 * .pi * frequency * t)
+                let value = Double(samples[n]) + tone * envelope * 5_000
+                samples[n] = Int16(max(-32_000, min(32_000, value)))
+            }
+        }
+        var wav = Data()
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { wav.append(contentsOf: $0) } }
+        let dataBytes = UInt32(total * 2)
+        wav.append(contentsOf: Array("RIFF".utf8)); append(36 + dataBytes)
+        wav.append(contentsOf: Array("WAVEfmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
+        append(UInt32(rate)); append(UInt32(rate * 2)); append(UInt16(2)); append(UInt16(16))
+        wav.append(contentsOf: Array("data".utf8)); append(dataBytes)
+        samples.withUnsafeBytes { wav.append(contentsOf: $0) }
+        cheatPlayer = try? AVAudioPlayer(data: wav)
+        cheatPlayer?.volume = 0.8
+        cheatPlayer?.play()
     }
 }

@@ -388,13 +388,18 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         /// TEAM fire after a 0.3 s hold with a ring; MAP VOTE opens the
         /// server's BDBMapVote window; TAUNT opens the taunt wheel.
         case checkpoint, noCheckpoint, suicide, mapVote, team, taunt
+        /// CAMERA (tap: a photo; slide off sideways: a burst; hold: a
+        /// selfie), VIEW (first / third person) and the CHEAT emblem (shown
+        /// while the cheat is on; hold 0.5 s to switch it off or on).
+        case camera, view, cheat
     }
 
     /// Top-row actions that fire once, on lift (taps) or after a hold.
-    static let commandActions: Set<Action> = [.checkpoint, .noCheckpoint, .suicide, .mapVote, .team]
-    /// Top-row actions that need a 0.3 s hold with a ring, so a stray touch
-    /// cannot kill the player or move them to the other team.
-    static let holdActions: Set<Action> = [.suicide, .team]
+    static let commandActions: Set<Action> = [.checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .view, .cheat]
+    /// Top-row actions that need a hold with a ring (0.3 s; the CHEAT emblem
+    /// 0.5 s, as JK's), so a stray touch cannot kill the player, move them to
+    /// the other team or change the cheat.
+    static let holdActions: Set<Action> = [.suicide, .team, .cheat]
 
     var onAction: ((Action, Bool) -> Void)?
     /// Dodges publish one direction per gesture instead of press/release
@@ -406,6 +411,11 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     /// MENU was held: the host opens its options tray.
     var onMenuHold: (() -> Void)?
     var onMove: ((CGPoint, Bool) -> Void)?
+    /// CAMERA: a photo (tap), a burst starting / stopping (slide off
+    /// sideways, then lift), a selfie (hold still 0.5 s).
+    var onCameraPhoto: (() -> Void)?
+    var onCameraBurst: ((Bool) -> Void)?
+    var onCameraSelfie: (() -> Void)?
     /// A taunt picked on the taunt wheel.
     var onTaunt: ((UT99TouchCommand) -> Void)?
     var onMenuCursorNudge: ((CGPoint) -> Void)?
@@ -464,6 +474,13 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     static let wheelOpenSlide: CGFloat = 10
     static let wheelHoldSeconds: CFTimeInterval = 0.3
     private let tauntWheel = UT99RadialWheelView()
+    static let cameraSelfieHold: CFTimeInterval = 0.5
+    static let cameraBurstSlide: CGFloat = 20
+    private enum CameraGesture { case idle, pending, burst, selfie }
+    private var cameraGesture = CameraGesture.idle
+    private var cameraOrigin = CGPoint.zero
+    private var cameraDownTime: CFTimeInterval = 0
+    private var cameraLink: CADisplayLink?
     private var wheelOrigin: CGPoint?
     private var wheelDownTime: CFTimeInterval = 0
     private var wheelLink: CADisplayLink?
@@ -544,6 +561,72 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             self.onTaunt?(command)
         }
         addSubview(tauntWheel)
+    }
+
+    // MARK: CAMERA (JK's gestures, without Action Freeze)
+
+    @objc private func cameraTouchBegan(_ sender: UIButton, forEvent event: UIEvent) {
+        guard !editingLayout, !menuInteractionActive, cameraGesture == .idle,
+              let touch = event.touches(for: sender)?.first,
+              let button = sender as? UT99TouchActionButton else { return }
+        cameraGesture = .pending
+        cameraOrigin = touch.location(in: self)
+        cameraDownTime = CACurrentMediaTime()
+        updateAppearance(of: button, for: .camera, pressed: true)
+        holdRing.removeFromSuperlayer()
+        let ringRadius = min(button.bounds.width, button.bounds.height) / 2 - 2.5
+        holdRing.path = UIBezierPath(arcCenter: CGPoint(x: button.bounds.midX, y: button.bounds.midY),
+                                     radius: max(ringRadius, 1), startAngle: -.pi / 2,
+                                     endAngle: 1.5 * .pi, clockwise: true).cgPath
+        holdRing.fillColor = UIColor.clear.cgColor
+        holdRing.strokeColor = UIColor(red: 0.47, green: 0.78, blue: 1, alpha: 0.95).cgColor
+        holdRing.lineWidth = 3
+        holdRing.strokeEnd = 0
+        button.layer.addSublayer(holdRing)
+        cameraLink?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(cameraHoldTick))
+        link.add(to: .main, forMode: .common)
+        cameraLink = link
+    }
+
+    @objc private func cameraHoldTick() {
+        guard cameraGesture == .pending else { return }
+        let progress = (CACurrentMediaTime() - cameraDownTime) / Self.cameraSelfieHold
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        holdRing.strokeEnd = CGFloat(min(progress, 1))
+        CATransaction.commit()
+        guard progress >= 1 else { return }
+        cameraGesture = .selfie
+        stopCameraTimer()
+        actionHaptic.impactOccurred(intensity: 0.9)
+        onCameraSelfie?()
+    }
+
+    private func stopCameraTimer() {
+        cameraLink?.invalidate()
+        cameraLink = nil
+        holdRing.removeFromSuperlayer()
+    }
+
+    @objc private func cameraTouchMoved(_ sender: UIButton, forEvent event: UIEvent) {
+        guard cameraGesture == .pending, let touch = event.touches(for: sender)?.first else { return }
+        let point = touch.location(in: self)
+        guard abs(point.x - cameraOrigin.x) >= Self.cameraBurstSlide else { return }
+        cameraGesture = .burst
+        stopCameraTimer()
+        onCameraBurst?(true)
+    }
+
+    @objc private func cameraTouchEnded(_ sender: UIButton) {
+        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: .camera, pressed: false) }
+        stopCameraTimer()
+        switch cameraGesture {
+        case .pending: onCameraPhoto?()
+        case .burst: onCameraBurst?(false)
+        case .selfie, .idle: break
+        }
+        cameraGesture = .idle
     }
 
     // MARK: Taunt wheel button (house wheel gestures)
@@ -879,6 +962,12 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                         return true
                     }
                 }
+            } else if action == .camera {
+                button.addTarget(self, action: #selector(cameraTouchBegan(_:forEvent:)), for: .touchDown)
+                button.addTarget(self, action: #selector(cameraTouchMoved(_:forEvent:)),
+                                 for: [.touchDragInside, .touchDragOutside])
+                button.addTarget(self, action: #selector(cameraTouchEnded(_:)),
+                                 for: [.touchUpInside, .touchUpOutside, .touchCancel])
             } else if action == .taunt {
                 // TAUNT: slide 10 pt to open the wheel at once and lift on a
                 // taunt; a tap or a 0.3 s hold opens it to tap (house wheel).
@@ -1737,7 +1826,11 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     }
 
     private func holdDuration(for action: Action) -> CFTimeInterval {
-        action == .pause ? Self.menuHoldSeconds : Self.customHoldSeconds
+        switch action {
+        case .pause: Self.menuHoldSeconds
+        case .cheat: 0.5
+        default: Self.customHoldSeconds
+        }
     }
 
     /// A top-row command that needs no hold fires on its tap's lift.
@@ -1920,6 +2013,10 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         stopWheelTimer()
         wheelOrigin = nil
         tauntWheel.close(picking: nil)
+        if cameraGesture == .burst { onCameraBurst?(false) }
+        cameraGesture = .idle
+        cameraLink?.invalidate()
+        cameraLink = nil
         dodgeTouchOrigin = nil
         if let dodge = buttons[.dodge] { updateAppearance(of: dodge, for: .dodge, pressed: false) }
         finishLookInput()
@@ -1967,6 +2064,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .mapVote: "MAP\nVOTE"
         case .team: "TEAM"
         case .taunt: "TAUNT"
+        case .camera: "CAMERA"
+        case .view: "VIEW"
+        case .cheat: "CHEAT"
         }
     }
 
@@ -1991,12 +2091,16 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .mapVote: "checklist"
         case .team: "arrow.left.arrow.right"
         case .taunt: "face.smiling"
+        case .camera: "camera.fill"
+        case .view: "eye"
+        case .cheat: "bolt.shield.fill"
         }
     }
 
     private func visualRole(for action: Action) -> UT99TouchActionButton.Role {
         switch action {
-        case .primaryFire: .primary
+        case .primaryFire, .cheat: .primary
+        case .camera: .dPad
         case .leftPrimaryFire: .secondary
         case .pause: .start
         case .scoreboard, .nextWeapon, .previousWeapon, .use: .utility
@@ -2028,6 +2132,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .mapVote: "Opens the server's map vote"
         case .team: "Hold to switch between the red and blue team"
         case .taunt: "Opens the taunt wheel"
+        case .camera: "Tap for a photo, slide off sideways for a burst, hold for a selfie"
+        case .view: "Switches between first and third person"
+        case .cheat: "Hold to switch the cheat off or on"
         }
     }
 
@@ -2044,7 +2151,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .dodge, .dodgeForward: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
         case .use, .scoreboard, .nextWeapon, .previousWeapon, .walk, .customCommand: UIColor(white: 0.22, alpha: 0.88)
         case .pause: UIColor(white: 0.28, alpha: 0.92)
-        case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt: UIColor(white: 0.22, alpha: 0.88)
+        case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt, .camera, .view, .cheat:
+            UIColor(white: 0.22, alpha: 0.88)
         }
     }
 

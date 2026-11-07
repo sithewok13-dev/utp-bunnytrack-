@@ -51,6 +51,72 @@ static uint64_t UT99PresentedDrawableHeight;
 static IMP UT99OriginalPresentDrawable;
 static BOOL UT99PresentationHookInstalled;
 
+// Photos (the host's CAMERA): the host asks for the next presented frame.
+// At presentation the drawable is copied into a shared buffer by a blit in
+// the same command buffer, and the callback gets the pixels once the GPU
+// has finished (on Metal's completion thread). One request at a time; the
+// callback gets NULL pixels when the frame cannot be read (a framebuffer-only
+// drawable or no blit encoder).
+typedef void (*UT99MetalCaptureCallback)(const uint8_t *pixels, size_t width, size_t height,
+                                         size_t bytesPerRow, uint32_t pixelFormat, void *context);
+static os_unfair_lock UT99CaptureLock = OS_UNFAIR_LOCK_INIT;
+static UT99MetalCaptureCallback UT99PendingCapture;
+static void *UT99PendingCaptureContext;
+
+int UT99MetalRequestCapture(UT99MetalCaptureCallback callback, void *context) {
+    if (!callback) return 0;
+    os_unfair_lock_lock(&UT99CaptureLock);
+    int accepted = UT99PendingCapture == NULL;
+    if (accepted) {
+        UT99PendingCapture = callback;
+        UT99PendingCaptureContext = context;
+    }
+    os_unfair_lock_unlock(&UT99CaptureLock);
+    return accepted;
+}
+
+static void UT99CaptureDrawable(id<MTLCommandBuffer> commandBuffer, id<CAMetalDrawable> drawable) {
+    os_unfair_lock_lock(&UT99CaptureLock);
+    UT99MetalCaptureCallback callback = UT99PendingCapture;
+    void *context = UT99PendingCaptureContext;
+    UT99PendingCapture = NULL;
+    UT99PendingCaptureContext = NULL;
+    os_unfair_lock_unlock(&UT99CaptureLock);
+    if (!callback) return;
+    id<MTLTexture> texture = drawable.texture;
+    if (!texture || texture.framebufferOnly) {
+        NSLog(@"UT99 Metal capture unavailable framebufferOnly=%d", texture ? (int)texture.framebufferOnly : -1);
+        callback(NULL, 0, 0, 0, 0, context);
+        return;
+    }
+    NSUInteger width = texture.width;
+    NSUInteger height = texture.height;
+    NSUInteger bytesPerRow = width * 4;
+    id<MTLBuffer> buffer = [texture.device newBufferWithLength:bytesPerRow * height
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> blit = buffer ? [commandBuffer blitCommandEncoder] : nil;
+    if (!blit) {
+        NSLog(@"UT99 Metal capture unavailable buffer=%d", buffer != nil);
+        callback(NULL, 0, 0, 0, 0, context);
+        return;
+    }
+    [blit copyFromTexture:texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(width, height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:bytesPerRow
+ destinationBytesPerImage:bytesPerRow * height];
+    [blit endEncoding];
+    uint32_t pixelFormat = (uint32_t)texture.pixelFormat;
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> finished) {
+        (void)finished;
+        callback((const uint8_t *)buffer.contents, width, height, bytesPerRow, pixelFormat, context);
+    }];
+}
+
 static int UT99CompareIntervals(const void *left, const void *right) {
     CFTimeInterval a = *(const CFTimeInterval *)left;
     CFTimeInterval b = *(const CFTimeInterval *)right;
@@ -78,6 +144,7 @@ static void UT99PresentDrawable(id commandBuffer, SEL selector, id<CAMetalDrawab
     UT99PresentedDrawableWidth = width;
     UT99PresentedDrawableHeight = height;
     os_unfair_lock_unlock(&UT99PresentationLock);
+    UT99CaptureDrawable((id<MTLCommandBuffer>)commandBuffer, drawable);
     ((void (*)(id, SEL, id<CAMetalDrawable>))UT99OriginalPresentDrawable)(
         commandBuffer, selector, drawable);
 }

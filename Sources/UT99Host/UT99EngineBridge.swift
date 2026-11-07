@@ -446,6 +446,21 @@ final class UT99EngineBridge {
         return output.joined(separator: "\n")
     }
 
+    /// Ask the Metal shim for the next frame the game presents; the image (or
+    /// nil) arrives on Metal's completion thread. False if a capture is
+    /// already waiting or the shim is not loaded.
+    @discardableResult
+    func requestFrameCapture(_ completion: @escaping (CGImage?) -> Void) -> Bool {
+        guard let metalShimHandle, let symbol = dlsym(metalShimHandle, "UT99MetalRequestCapture") else {
+            return false
+        }
+        typealias RequestCapture = @convention(c) (UT99FrameCapture.Callback, UnsafeMutableRawPointer?) -> Int32
+        let box = Unmanaged.passRetained(UT99FrameCapture(completion: completion))
+        let accepted = unsafeBitCast(symbol, to: RequestCapture.self)(UT99FrameCapture.callback, box.toOpaque()) != 0
+        if !accepted { box.release() }
+        return accepted
+    }
+
     func rendererMetrics() -> RendererMetrics {
         guard let metalShimHandle,
               let symbol = dlsym(metalShimHandle, "UT99MetalCopyPresentationMetrics") else {
@@ -515,7 +530,7 @@ final class UT99EngineBridge {
         case .crouch: pushKey(key: 99, pressed: pressed) // C=Duck
         case .dodge, .dodgeForward: break // Directional; dodges publish through publishTouchDodge.
         // Console commands; the host sends them (publishConsoleCommand).
-        case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt: break
+        case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt, .camera, .view, .cheat: break
         case .walk: pushKey(key: (1 << 30) | 74, pressed: pressed) // Home=Walking, bound by the host
         case .customCommand: pushKey(key: (1 << 30) | 73, pressed: pressed) // Insert=player's command
         case .nextWeapon: if pressed { pushMouseWheel(y: -1) } // MouseWheelDown
@@ -1817,5 +1832,47 @@ final class UT99EngineBridge {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Unreal Tournament", isDirectory: true)
             .appendingPathComponent("UT99-server-browser-smoke.log")
+    }
+}
+
+
+/// Carries a capture's completion through the Metal shim's C callback and
+/// turns its pixels into a CGImage (copied, so the GPU buffer can go).
+final class UT99FrameCapture {
+    typealias Callback = @convention(c) (UnsafePointer<UInt8>?, Int, Int, Int, UInt32, UnsafeMutableRawPointer?) -> Void
+
+    let completion: (CGImage?) -> Void
+
+    init(completion: @escaping (CGImage?) -> Void) {
+        self.completion = completion
+    }
+
+    static let callback: Callback = { pixels, width, height, bytesPerRow, pixelFormat, context in
+        guard let context else { return }
+        let capture = Unmanaged<UT99FrameCapture>.fromOpaque(context).takeRetainedValue()
+        capture.completion(pixels.flatMap {
+            UT99FrameCapture.image(pixels: $0, width: width, height: height, bytesPerRow: bytesPerRow, pixelFormat: pixelFormat)
+        })
+    }
+
+    /// 8-bit BGRA and RGBA drawables (MTLPixelFormat 80/81 and 70/71).
+    static func image(pixels: UnsafePointer<UInt8>, width: Int, height: Int,
+                      bytesPerRow: Int, pixelFormat: UInt32) -> CGImage? {
+        let bgra = pixelFormat == 80 || pixelFormat == 81
+        let rgba = pixelFormat == 70 || pixelFormat == 71
+        guard width > 0, height > 0, bgra || rgba,
+              let provider = CGDataProvider(data: Data(bytes: pixels, count: bytesPerRow * height) as CFData)
+        else {
+            NSLog("UT99 frame capture unsupported pixelFormat=%u", pixelFormat)
+            return nil
+        }
+        let alpha = CGImageAlphaInfo.noneSkipFirst.rawValue
+        let info: CGBitmapInfo = bgra
+            ? CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | alpha)
+            : CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue)
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: bytesPerRow, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                       bitmapInfo: info, provider: provider, decode: nil,
+                       shouldInterpolate: false, intent: .defaultIntent)
     }
 }

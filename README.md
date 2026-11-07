@@ -164,6 +164,15 @@ The touch interface is designed as a full-bleed landscape overlay:
   BTPlusPlus's `!cp` and `!nocp`). UTP binds these commands to keypad keys in
   User.ini each time the game starts, so a button press runs them exactly as
   typed.
+- **CAMERA** (top middle): tap for a photo, slide off sideways for a burst
+  (a photo every 0.2 s, up to 10), hold for a selfie (third person, a taunt,
+  three photos). Photos go straight to the Photos app. **VIEW** switches
+  first and third person (servers may not allow third person). The tray's
+  camera symbol hides or shows both.
+- **CHEAT** (tray): invincibility, every weapon and full ammo, with a burst
+  of light and a power-up sound; offline games only (servers refuse
+  cheats). While it's on, a CHEAT emblem on the top row switches it off
+  with a 0.5 s hold. It comes back on each new map.
 - **Bunny Track:** the default profile: a big JUMP with ◀ ▲ ▶ DODGE above it,
   FIRE and WALK to its left and DUCK in the corner; no weapon buttons (BT
   servers give the shock rifle). Controls & Display → Apply BT Layout puts it
