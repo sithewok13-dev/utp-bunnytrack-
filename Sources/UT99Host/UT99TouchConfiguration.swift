@@ -4,14 +4,17 @@ struct UT99TouchConfiguration: Codable, Equatable {
     static let defaultsKey = "ut99.touch.configuration.v1"
     static let supportedActionIDs: Set<String> = [
         "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
-        "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward"
+        "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward",
+        "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt"
     ]
     /// Controls the Bunny Track layout hides: combat and inventory buttons a
-    /// trick-jump run never needs, plus the DODGE pad the look-side flick
-    /// replaces.
+    /// trick-jump run never needs (BT servers give the shock rifle only, so
+    /// no weapon switching), and CUSTOM, which the top row's SUICIDE replaces.
     static let bunnyTrackHiddenActions: Set<String> = [
-        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard"
+        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "customCommand"
     ]
+    /// Bunny Track's checkpoint pair; other profiles hide it.
+    static let bunnyTrackOnlyActions: Set<String> = ["checkpoint", "noCheckpoint"]
     static let defaultCustomCommand = "suicide"
 
     var leftHanded: Bool
@@ -92,7 +95,8 @@ struct UT99TouchConfiguration: Codable, Equatable {
         leftHanded: false,
         // The look-side flick replaces the DODGE pad, and WALK and CUSTOM are
         // Bunny Track tools; the BT layout turns the last two on.
-        hiddenActions: ["scoreboard", "dodge", "walk", "customCommand", "dodgeForward"],
+        hiddenActions: ["scoreboard", "dodge", "walk", "customCommand", "dodgeForward",
+                        "checkpoint", "noCheckpoint"],
         lookAcceleration: 0.45,
         lookDeadZone: 0.00025,
         movementDeadZone: 0.04,
@@ -155,6 +159,13 @@ struct UT99TouchConfiguration: Codable, Equatable {
         if !defaults.bool(forKey: bunnyTrackMigrationKey) {
             configuration.hiddenActions.formUnion(["dodge", "walk", "customCommand"])
             defaults.set(true, forKey: bunnyTrackMigrationKey)
+        }
+        // The top row is new: SUICIDE, MAP VOTE, TEAM and TAUNT show in every
+        // profile; the checkpoint pair starts hidden (Bunny Track shows it).
+        let topRowMigrationKey = "ut99.touch.migration.topRow.v1"
+        if !defaults.bool(forKey: topRowMigrationKey) {
+            configuration.hiddenActions.formUnion(bunnyTrackOnlyActions)
+            defaults.set(true, forKey: topRowMigrationKey)
         }
         // ▲ DODGE is new; it starts hidden and the Bunny Track profile shows it.
         let forwardDodgeMigrationKey = "ut99.touch.migration.forwardDodge.v1"
@@ -271,6 +282,77 @@ enum UT99FlickDodge {
 /// Keys the WALK and CUSTOM buttons press, and the User.ini lines that bind
 /// them. The host rewrites only these two lines under [Engine.Input] at each
 /// engine start, so the buttons work whatever the player's other bindings.
+/// Console commands the touch controls run. Each is bound to an otherwise
+/// unused keypad key in User.ini at engine start (like WALK and CUSTOM), and
+/// the button presses that key: the engine runs the command exactly as if
+/// typed, with no typing line on screen and no characters to lose.
+/// The checkpoint pair says BTPlusPlus's chat commands !cp and !nocp.
+enum UT99TouchCommand: String, CaseIterable {
+    case checkpoint, noCheckpoint, suicide, mapVote, teamRed, teamBlue
+    case tauntWave, tauntVictory, tauntTaunt, tauntThrust
+    case voice0, voice1, voice2, voice3
+
+    var command: String {
+        switch self {
+        case .checkpoint: "say !cp"
+        case .noCheckpoint: "say !nocp"
+        case .suicide: "suicide"
+        case .mapVote: "mutate bdbmapvote votemenu"
+        case .teamRed: "changeteam 0"
+        case .teamBlue: "changeteam 1"
+        case .tauntWave: "taunt wave"
+        case .tauntVictory: "taunt victory1"
+        case .tauntTaunt: "taunt taunt1"
+        case .tauntThrust: "taunt thrust"
+        case .voice0: "speech 4 0 0"
+        case .voice1: "speech 4 1 0"
+        case .voice2: "speech 4 2 0"
+        case .voice3: "speech 4 3 0"
+        }
+    }
+
+    /// The UT key name in [Engine.Input].
+    var keyName: String {
+        switch self {
+        case .checkpoint: "NumPad1"
+        case .noCheckpoint: "NumPad2"
+        case .suicide: "NumPad3"
+        case .mapVote: "NumPad4"
+        case .teamRed: "NumPad5"
+        case .teamBlue: "NumPad6"
+        case .tauntWave: "NumPad7"
+        case .tauntVictory: "NumPad8"
+        case .tauntTaunt: "NumPad9"
+        case .tauntThrust: "NumPad0"
+        case .voice0: "GreySlash"
+        case .voice1: "GreyStar"
+        case .voice2: "GreyMinus"
+        case .voice3: "GreyPlus"
+        }
+    }
+
+    /// The SDL scancode of that key (SDL_SCANCODE_KP_*); its keycode is
+    /// this with bit 30 set.
+    var sdlScancode: Int32 {
+        switch self {
+        case .checkpoint: 89
+        case .noCheckpoint: 90
+        case .suicide: 91
+        case .mapVote: 92
+        case .teamRed: 93
+        case .teamBlue: 94
+        case .tauntWave: 95
+        case .tauntVictory: 96
+        case .tauntTaunt: 97
+        case .tauntThrust: 98
+        case .voice0: 84
+        case .voice1: 85
+        case .voice2: 86
+        case .voice3: 87
+        }
+    }
+}
+
 enum UT99TouchKeyBindings {
     static let walkKeyName = "Home"
     static let customKeyName = "Insert"
@@ -291,7 +373,7 @@ enum UT99TouchKeyBindings {
         let wanted: [(key: String, value: String)] = [
             (walkKeyName, walkCommand),
             (customKeyName, sanitizedCommand(customCommand)),
-        ]
+        ] + UT99TouchCommand.allCases.map { ($0.keyName, $0.command) }
         var lines = ini.components(separatedBy: "\n")
         let lineEnding = lines.first?.hasSuffix("\r") == true ? "\r" : ""
         func bare(_ line: String) -> String { line.hasSuffix("\r") ? String(line.dropLast()) : line }
@@ -567,7 +649,7 @@ enum UT99TouchInputTuning {
         let magnitude = hypot(value.x, value.y)
         guard Double(magnitude) > config.lookDeadZone else { return CGPoint(x: 0, y: 0) }
 
-        let clampedSensitivity = min(max(sensitivity, 0.25), 3.0)
+        let clampedSensitivity = min(max(sensitivity, 0.25), 4.0)
         // Pan deltas are normalized against the live look surface. Scale their
         // speed into a bounded curve so slow aim stays precise while a quick
         // swipe can still turn fast enough for UT combat.

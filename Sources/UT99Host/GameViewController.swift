@@ -733,6 +733,9 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     fileprivate var hostToast: UIView?
     fileprivate var hostStateWatchLink: CADisplayLink?
     fileprivate var lastHostWatchTick: CFTimeInterval = 0
+    /// FPS readout (tray's FPS), left of the top row's right-hand buttons.
+    fileprivate let fpsLabel = UILabel()
+    fileprivate var fpsSample: (frames: UInt64, at: CFTimeInterval)?
     fileprivate var lastEngineLogScan: CFTimeInterval = 0
     fileprivate var lastViewportGameplayCapture: Bool?
     fileprivate var engineLogOffsets: [String: UInt64] = [:]
@@ -1235,8 +1238,15 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
                 self.engineBridge.publishMenuCursorClick(pressed: pressed)
                 return
             }
+            if GoldenPadTouchOverlay.commandActions.contains(action) {
+                if pressed { self.runTouchCommand(for: action) }
+                return
+            }
             self.engineBridge.publishTouchAction(action, pressed: pressed)
             if action == .pause && !pressed { self.followMenuButtonTap() }
+        }
+        touchOverlay.onTaunt = { [weak self] command in
+            self?.engineBridge.publishTouchCommand(command)
         }
         touchOverlay.onDodge = { [weak self] direction, undoLook in
             guard let self, !self.originalMenuInputActive else { return }
@@ -3692,7 +3702,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
             UserDefaults.standard.set(!invert, forKey: "ut99.input.invertLookY")
             self?.showControlsInfo()
         })
-        let sensitivity = max(0.25, min(3.0, UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity")))
+        let sensitivity = max(0.25, min(4.0, UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity")))
         for value in [0.75, 1.0, 1.5, 2.0] {
             let marker = abs(value - sensitivity) < 0.01 ? " ✓" : ""
             let sensitivityTitle = "Look sensitivity: " + String(format: "%.2gx", value) + marker
@@ -3834,8 +3844,8 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
 
         let lookSensitivity = UISlider()
         lookSensitivity.minimumValue = 0.5
-        lookSensitivity.maximumValue = 3.0
-        lookSensitivity.value = Float(max(0.5, min(3.0, UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity"))))
+        lookSensitivity.maximumValue = 4.0
+        lookSensitivity.value = Float(max(0.5, min(4.0, UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity"))))
         lookSensitivity.minimumTrackTintColor = UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 1)
         lookSensitivity.accessibilityLabel = "Look sensitivity"
         lookSensitivity.addTarget(self, action: #selector(touchLookSensitivityChanged(_:)), for: .valueChanged)
@@ -4338,7 +4348,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     }
 
     private func controlsSummary() -> String {
-        let sensitivity = max(0.25, min(3.0, UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity")))
+        let sensitivity = max(0.25, min(4.0, UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity")))
         let invert = UserDefaults.standard.bool(forKey: "ut99.input.invertLookY")
         let sensitivityText = String(format: "%.2gx", sensitivity)
         let configuration = UT99TouchConfiguration.load()
@@ -5955,6 +5965,26 @@ extension GameViewController: UITextFieldDelegate {
     }
 
     func configureTouchFirstChrome() {
+        // House defaults, once: look sensitivity 2.0x (the old default 1.0x was
+        // far too slow) and OPACITY 100% (buttons rest at 65% of it).
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: "ut99.touch.migration.houseDefaults.v1") {
+            defaults.set(true, forKey: "ut99.touch.migration.houseDefaults.v1")
+            if defaults.object(forKey: "ut99.input.lookSensitivity") == nil ||
+                defaults.double(forKey: "ut99.input.lookSensitivity") <= 1.0 {
+                defaults.set(2.0, forKey: "ut99.input.lookSensitivity")
+            }
+            touchOverlay.setTouchOpacity(1)
+        }
+        fpsLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .bold)
+        fpsLabel.textColor = UIColor(white: 1, alpha: 0.85)
+        fpsLabel.shadowColor = UIColor(white: 0, alpha: 0.8)
+        fpsLabel.shadowOffset = CGSize(width: 0, height: 1)
+        fpsLabel.textAlignment = .right
+        fpsLabel.isUserInteractionEnabled = false
+        fpsLabel.isHidden = true
+        fpsLabel.tag = Self.touchFirstChromeTag
+        view.addSubview(fpsLabel)
         // Bunny Track controls are the default: start there once, then stay
         // on whatever profile the player picks.
         let btDefaultKey = "ut99.touch.migration.bunnyTrackDefault.v1"
@@ -6007,6 +6037,7 @@ extension GameViewController: UITextFieldDelegate {
         lastHostWatchTick = now
         if isEngineActive { keepHostWindowAboveEngine() }
         updateTouchFirstChrome()
+        updateFPSReadout(now: now)
         if !UserDefaults.standard.bool(forKey: Self.bunnyTrackPlacementMigrationKey) {
             applyOneTimeProfileMigrations()
         }
@@ -6087,7 +6118,9 @@ extension GameViewController: UITextFieldDelegate {
         if let pending = pendingViewportSample {
             guard CACurrentMediaTime() >= pending.due else { return }
             pendingViewportSample = nil
-            if let words = engineBridge.viewportWords() {
+            // Only when the host's mode agrees with what the sample claims:
+            // a player who opened the menu meanwhile must not teach "play".
+            if pending.menu == originalMenuInputActive, let words = engineBridge.viewportWords() {
                 let before = viewportLearner.learned
                 viewportLearner.add(words, menu: pending.menu)
                 viewportLearner.save()
@@ -6181,6 +6214,11 @@ extension GameViewController: UITextFieldDelegate {
             }
             NSLog("UT99 engine log map=%@", map)
             engineInPlayableMap = true
+            // Learn UT's window state without the player's help: a few
+            // seconds into a map is play (if the host still says so then).
+            if pendingViewportSample == nil {
+                pendingViewportSample = (false, CACurrentMediaTime() + 4)
+            }
             // Loading a playable map closes UT's menus, so play starts with
             // game controls whether or not the viewport flag flips.
             if touchOverlay.touchConfiguration.autoMenuSwitch, originalMenuInputActive,
@@ -6201,12 +6239,41 @@ extension GameViewController: UITextFieldDelegate {
             // Disconnected or back at the title: UT's menu is up.
             engineInPlayableMap = false
             NSLog("UT99 engine log title map")
+            // The title shows UT's menu: a menu sample once it is up.
+            pendingViewportSample = (true, CACurrentMediaTime() + 2.5)
             if touchOverlay.touchConfiguration.autoMenuSwitch, !originalMenuInputActive,
                !touchOverlay.editingLayout, hostState == .running {
                 setOriginalMenuInputActive(true)
                 refreshHostMenu()
             }
         }
+    }
+
+    /// TEAM switches to the other team. The engine does not say which team the
+    /// player is on, so the host remembers its last switch (starting from red,
+    /// as UT places most players), per launch.
+    fileprivate static var nextTeamIsBlue = true
+
+    private func runTouchCommand(for action: GoldenPadTouchOverlay.Action) {
+        let command: UT99TouchCommand
+        switch action {
+        case .checkpoint: command = .checkpoint
+        case .noCheckpoint: command = .noCheckpoint
+        case .suicide: command = .suicide
+        case .mapVote:
+            command = .mapVote
+            // BDBMapVote opens a UT window: follow it with menu touch.
+            if touchOverlay.touchConfiguration.autoMenuSwitch, !originalMenuInputActive {
+                setOriginalMenuInputActive(true)
+                refreshHostMenu()
+            }
+        case .team:
+            command = Self.nextTeamIsBlue ? .teamBlue : .teamRed
+            showHostToast(Self.nextTeamIsBlue ? "Switching to BLUE" : "Switching to RED")
+            Self.nextTeamIsBlue.toggle()
+        default: return
+        }
+        engineBridge.publishTouchCommand(command)
     }
 
     /// MENU is Escape, which opens UT's menu during a match and closes it
@@ -6260,7 +6327,7 @@ extension GameViewController: UITextFieldDelegate {
         NSLog("UT99 touch profile active=%@", name)
     }
 
-    static let bunnyTrackPlacementMigrationKey = "ut99.touch.migration.bunnyTrackDodgePlacement.v2"
+    static let bunnyTrackPlacementMigrationKey = "ut99.touch.migration.bunnyTrackCluster.v3"
 
     /// One-time changes to saved profiles, each applied the first time that
     /// profile is active; the player can change any of it again afterwards.
@@ -6289,15 +6356,30 @@ extension GameViewController: UITextFieldDelegate {
                 _ = try? UT99TouchProfileStore.upsert(saved)
             }
         }
-        // Put ◀ ▲ ▶ DODGE above JUMP in Bunny Track profiles saved before that
-        // placement existed. Needs a laid-out overlay, so it retries from the
-        // watch tick until it can place them.
+        // The top row is new: its checkpoint pair belongs to Bunny Track only.
+        let topRowKey = "ut99.touch.migration.topRow.v1.\(activeTouchProfileName)"
+        if activeTouchProfileName != UT99TouchProfileName.bunnyTrack, !defaults.bool(forKey: topRowKey) {
+            defaults.set(true, forKey: topRowKey)
+            touchOverlay.setAction(.checkpoint, visible: false)
+            touchOverlay.setAction(.noCheckpoint, visible: false)
+            if let saved = try? touchOverlay.makeTouchProfile(named: activeTouchProfileName) {
+                _ = try? UT99TouchProfileStore.upsert(saved)
+            }
+        }
+        // Move Bunny Track profiles saved before it to the current cluster
+        // (◀ ▲ ▶ DODGE over JUMP, FIRE, WALK and DUCK lower right) and the
+        // top row (CP / NO CP, SUICIDE in place of CUSTOM). Needs a laid-out
+        // overlay, so it retries from the watch tick until it can place them.
         let placementKey = Self.bunnyTrackPlacementMigrationKey
         if activeTouchProfileName == UT99TouchProfileName.bunnyTrack,
            !defaults.bool(forKey: placementKey), !touchOverlay.editingLayout,
            touchOverlay.placeBunnyTrackButtons() {
             defaults.set(true, forKey: placementKey)
-            touchOverlay.setAction(.dodgeForward, visible: true)
+            for action: GoldenPadTouchOverlay.Action in [.dodgeForward, .checkpoint, .noCheckpoint, .walk, .crouch,
+                                                          .suicide, .mapVote, .team, .taunt] {
+                touchOverlay.setAction(action, visible: true)
+            }
+            touchOverlay.setAction(.customCommand, visible: false)
             if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
                 _ = try? UT99TouchProfileStore.upsert(saved)
             }
@@ -6359,64 +6441,109 @@ extension GameViewController: UITextFieldDelegate {
         }
     }
 
+    // The house tray (guide 3.1): under MENU, small round buttons 50 pt apart
+    // on a dark pill; a touch anywhere else closes it. SENS and PROFILE step
+    // and keep it open; OPACITY opens its slider; the rest act and close it.
+    static let trayButtonRadius: CGFloat = 20
+    static let trayStep: CGFloat = 50
+    static let lookSensitivitySteps: [Double] = [1.0, 1.5, 2.0, 3.0, 4.0]
+    static let showFPSKey = "ut99.touch.showFps"
+
     private func showOptionsTray() {
         closeOptionsTray()
         releaseGameplayInputs()
-        let dim = UIControl()
-        dim.translatesAutoresizingMaskIntoConstraints = false
-        dim.backgroundColor = UIColor.black.withAlphaComponent(0.28)
+        let dim = UIControl(frame: view.bounds)
+        dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        dim.backgroundColor = .clear
         dim.accessibilityLabel = "Close options"
         dim.addAction(UIAction { [weak self] _ in self?.closeOptionsTray() }, for: .touchDown)
 
-        let panel = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        panel.layer.cornerRadius = 18
-        panel.layer.cornerCurve = .continuous
-        panel.layer.borderWidth = 1
-        panel.layer.borderColor = UIColor.white.withAlphaComponent(0.24).cgColor
-        panel.clipsToBounds = true
-
-        let inMenu = originalMenuInputActive
-        let items: [UIButton] = [
-            trayButton("PROFILE", detail: activeTouchProfileName, symbol: "person.crop.square") { [weak self] in
-                self?.cycleTouchProfile()
-            },
-            trayButton("KEYBOARD", symbol: "keyboard") { [weak self] in self?.toggleMenuTextKeyboard() },
-            trayButton("CONSOLE", symbol: "terminal") { [weak self] in self?.showConsoleBar() },
-            trayButton("SERVERS", symbol: "clock.arrow.circlepath") { [weak self] in self?.showRecentServers() },
-            trayButton(inMenu ? "PLAY" : "MENU", detail: "controls",
-                       symbol: inMenu ? "gamecontroller.fill" : "cursorarrow.click") { [weak self] in
-                self?.selectTouchInterfaceMode(menu: !inMenu)
-            },
-            trayButton("LAYOUT", symbol: "move.3d") { [weak self] in self?.editTouchLayout() },
-            trayButton("SETTINGS", symbol: "slider.horizontal.3") { [weak self] in self?.showTouchSettings() },
-            trayButton("MORE", symbol: "ellipsis.circle") { [weak self] in self?.toggleMenu() },
+        let sensitivity = UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity")
+        let opacity = Int((touchOverlay.touchOpacity * 100).rounded())
+        let showFPS = UserDefaults.standard.bool(forKey: Self.showFPSKey)
+        let profile = activeTouchProfileName == UT99TouchProfileName.bunnyTrack ? "BT" : "DM"
+        typealias Item = (title: String, symbol: String?, keepOpen: Bool, action: () -> Void)
+        let items: [Item] = [
+            ("PROFILE\n\(profile)", nil, true, { [weak self] in self?.cycleTouchProfile() }),
+            (String(format: "SENS\n%.1fx", sensitivity), nil, true, { [weak self] in self?.stepLookSensitivity() }),
+            ("OPACITY\n\(opacity)%", nil, true, { [weak self] in self?.toggleOpacitySlider() }),
+            ("FPS\n\(showFPS ? "ON" : "OFF")", nil, false, {
+                UserDefaults.standard.set(!showFPS, forKey: Self.showFPSKey)
+            }),
+            ("", "keyboard", false, { [weak self] in self?.toggleMenuTextKeyboard() }),
+            ("CON-\nSOLE", nil, false, { [weak self] in self?.showConsoleBar() }),
+            ("SERV-\nERS", nil, false, { [weak self] in self?.showRecentServers() }),
+            ("LAYOUT", nil, false, { [weak self] in self?.editTouchLayout() }),
+            ("MORE", nil, false, { [weak self] in self?.toggleMenu() }),
         ]
-        let row = UIStackView(arrangedSubviews: items)
-        row.axis = .horizontal
-        row.distribution = .fillEqually
-        row.spacing = 6
-        row.translatesAutoresizingMaskIntoConstraints = false
-        panel.contentView.addSubview(row)
+
+        let menuFrame = touchOverlay.buttonFrame(.pause) ?? CGRect(
+            x: view.bounds.maxX - view.safeAreaInsets.right - 104, y: view.safeAreaInsets.top + 18, width: 44, height: 44)
+        let radius = Self.trayButtonRadius
+        let width = Self.trayStep * CGFloat(items.count - 1) + radius * 2 + 12
+        let safeMinX = view.safeAreaInsets.left + 8
+        let panelX = max(safeMinX, menuFrame.maxX + 6 - width)
+        let panel = UIView(frame: CGRect(x: panelX, y: menuFrame.maxY + 8, width: width, height: radius * 2 + 12))
+        panel.backgroundColor = UIColor(white: 0, alpha: 0.55)
+        panel.layer.cornerRadius = 26
+        panel.layer.borderWidth = 1.5
+        panel.layer.borderColor = UIColor(white: 1, alpha: 0.4).cgColor
+        for (index, item) in items.enumerated() {
+            let button = UIButton(type: .custom)
+            button.frame = CGRect(x: 6 + Self.trayStep * CGFloat(index), y: 6, width: radius * 2, height: radius * 2)
+            button.backgroundColor = UIColor(white: 0, alpha: 0.22)
+            button.layer.cornerRadius = radius
+            button.layer.borderWidth = 1.5
+            button.layer.borderColor = UIColor(white: 1, alpha: 0.4).cgColor
+            if let symbol = item.symbol {
+                button.setImage(UIImage(systemName: symbol, withConfiguration:
+                    UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)), for: .normal)
+                button.tintColor = UIColor(white: 1, alpha: 0.85)
+                button.accessibilityLabel = "Keyboard"
+            } else {
+                button.setTitle(item.title, for: .normal)
+                button.accessibilityLabel = item.title.replacingOccurrences(of: "\n", with: " ")
+            }
+            button.titleLabel?.numberOfLines = 2
+            button.titleLabel?.textAlignment = .center
+            button.titleLabel?.font = .boldSystemFont(ofSize: 8)
+            button.titleLabel?.adjustsFontSizeToFitWidth = true
+            button.setTitleColor(UIColor(white: 1, alpha: 0.85), for: .normal)
+            let keepOpen = item.keepOpen
+            let action = item.action
+            let title = item.title
+            button.addAction(UIAction { [weak self] _ in
+                NSLog("UT99 options tray action=%@", title)
+                // Run inline: the engine's main loop does not drain main.async.
+                if keepOpen {
+                    action()
+                    if self?.opacitySlider == nil { self?.showOptionsTray() }
+                } else {
+                    self?.closeOptionsTray()
+                    action()
+                }
+            }, for: .touchUpInside)
+            if index == 2 {
+                // OPACITY: hold to go back to 100%.
+                let hold = UILongPressGestureRecognizer(target: self, action: #selector(opacityTrayHeld(_:)))
+                hold.minimumPressDuration = 0.45
+                button.addGestureRecognizer(hold)
+            }
+            panel.addSubview(button)
+        }
+        let version = UILabel(frame: CGRect(x: panel.frame.minX, y: panel.frame.maxY + 3,
+                                            width: panel.frame.width, height: 14))
+        version.text = Self.buildVersionText
+        version.textAlignment = .center
+        version.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        version.textColor = UIColor(white: 1, alpha: 0.5)
+        version.shadowColor = UIColor(white: 0, alpha: 0.8)
+        version.shadowOffset = CGSize(width: 0, height: 1)
+        version.isUserInteractionEnabled = false
+        dim.addSubview(version)
 
         view.addSubview(dim)
         view.addSubview(panel)
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            dim.topAnchor.constraint(equalTo: view.topAnchor),
-            dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            panel.centerXAnchor.constraint(equalTo: safe.centerXAnchor),
-            panel.topAnchor.constraint(equalTo: safe.topAnchor, constant: 62),
-            panel.widthAnchor.constraint(lessThanOrEqualTo: safe.widthAnchor, constant: -24),
-            panel.widthAnchor.constraint(equalToConstant: CGFloat(items.count) * 86).withPriority(.defaultHigh),
-            row.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: 8),
-            row.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -8),
-            row.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: 8),
-            row.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -8),
-            row.heightAnchor.constraint(equalToConstant: 72),
-        ])
         panel.tag = Self.touchFirstChromeTag
         dim.tag = Self.touchFirstChromeTag
         optionsTray = panel
@@ -6424,47 +6551,89 @@ extension GameViewController: UITextFieldDelegate {
         view.bringSubviewToFront(dim)
         view.bringSubviewToFront(panel)
         NSLog("UT99 options tray opened mode=%@ profile=%@",
-              inMenu ? "menu" : "gameplay", activeTouchProfileName)
+              originalMenuInputActive ? "menu" : "gameplay", activeTouchProfileName)
     }
 
-    private func trayButton(
-        _ title: String,
-        detail: String? = nil,
-        symbol: String,
-        handler: @escaping () -> Void
-    ) -> UIButton {
-        var configuration = UIButton.Configuration.filled()
-        configuration.title = title
-        configuration.subtitle = detail
-        configuration.image = UIImage(systemName: symbol)
-        configuration.imagePlacement = .top
-        configuration.imagePadding = 6
-        configuration.titleAlignment = .center
-        configuration.baseBackgroundColor = UIColor(white: 0.18, alpha: 0.92)
-        configuration.baseForegroundColor = .white
-        configuration.cornerStyle = .medium
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 2, bottom: 6, trailing: 2)
-        // Fixed sizes: the tray must fit one row at any system text size.
-        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-            var outgoing = incoming
-            outgoing.font = .systemFont(ofSize: 11, weight: .bold)
-            return outgoing
+    /// "NN FPS" from frames presented over the last 0.5 s, beside the top row.
+    private func updateFPSReadout(now: CFTimeInterval) {
+        let wanted = UserDefaults.standard.bool(forKey: Self.showFPSKey) && hostState == .running &&
+            !originalMenuInputActive
+        guard wanted else {
+            if !fpsLabel.isHidden { fpsLabel.isHidden = true }
+            fpsSample = nil
+            return
         }
-        configuration.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-            var outgoing = incoming
-            outgoing.font = .systemFont(ofSize: 9, weight: .medium)
-            outgoing.foregroundColor = UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 1)
-            return outgoing
+        let frames = engineBridge.rendererMetrics().frameCount
+        guard let sample = fpsSample else {
+            fpsSample = (frames, now)
+            return
         }
-        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
-        configuration.titleLineBreakMode = .byTruncatingTail
-        configuration.subtitleLineBreakMode = .byTruncatingTail
-        return UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in
-            NSLog("UT99 options tray action=%@", title)
-            self?.closeOptionsTray()
-            // Run inline: the engine's main loop does not drain main.async.
-            handler()
-        })
+        guard now - sample.at >= 0.5 else { return }
+        let fps = Double(frames &- sample.frames) / (now - sample.at)
+        fpsSample = (frames, now)
+        let anchor = touchOverlay.buttonFrame(.suicide) ?? touchOverlay.buttonFrame(.pause) ??
+            CGRect(x: view.bounds.maxX - view.safeAreaInsets.right - 104, y: view.safeAreaInsets.top + 18, width: 44, height: 44)
+        let frame = CGRect(x: anchor.minX - 70, y: anchor.midY - 9, width: 62, height: 18)
+        if fpsLabel.frame != frame { fpsLabel.frame = frame }
+        fpsLabel.text = "\(Int(fps.rounded())) FPS"
+        if fpsLabel.isHidden { fpsLabel.isHidden = false }
+    }
+
+    /// "v<short version>" plus " (<build>)" when that differs: identifies the build.
+    static var buildVersionText: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String
+        return build.map { $0 == short ? "v\(short)" : "v\(short) (\($0))" } ?? "v\(short)"
+    }
+
+    private func stepLookSensitivity() {
+        let current = UserDefaults.standard.double(forKey: "ut99.input.lookSensitivity")
+        let next = Self.lookSensitivitySteps.first { $0 > current + 0.01 } ?? Self.lookSensitivitySteps[0]
+        UserDefaults.standard.set(next, forKey: "ut99.input.lookSensitivity")
+        NSLog("UT99 look sensitivity=%.1f", next)
+    }
+
+    fileprivate var opacitySlider: UIView? {
+        get { view.viewWithTag(Self.opacitySliderTag) }
+    }
+    static let opacitySliderTag = 0x55_54_51
+
+    private func toggleOpacitySlider() {
+        if let slider = opacitySlider {
+            slider.removeFromSuperview()
+            return
+        }
+        guard let tray = optionsTray else { return }
+        let back = UIView(frame: CGRect(x: tray.frame.midX - 120, y: tray.frame.maxY + 22, width: 240, height: 44))
+        back.backgroundColor = UIColor(white: 0, alpha: 0.55)
+        back.layer.cornerRadius = 22
+        back.layer.borderWidth = 1.5
+        back.layer.borderColor = UIColor(white: 1, alpha: 0.4).cgColor
+        let slider = UISlider(frame: CGRect(x: 16, y: 7, width: 208, height: 30))
+        slider.minimumValue = 0.2
+        slider.maximumValue = 1
+        slider.value = Float(touchOverlay.touchOpacity)
+        slider.minimumTrackTintColor = UIColor(red: 0.47, green: 0.78, blue: 1, alpha: 0.95)
+        slider.addAction(UIAction { [weak self, weak slider] _ in
+            guard let self, let slider else { return }
+            // 5% steps, live.
+            let stepped = (slider.value * 20).rounded() / 20
+            self.touchOverlay.setTouchOpacity(CGFloat(stepped))
+        }, for: .valueChanged)
+        slider.addAction(UIAction { [weak self] _ in
+            self?.showOptionsTray()
+        }, for: [.touchUpInside, .touchUpOutside])
+        back.addSubview(slider)
+        back.tag = Self.opacitySliderTag
+        optionsTrayDim?.addSubview(back)
+    }
+
+    @objc private func opacityTrayHeld(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        touchOverlay.setTouchOpacity(1)
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        showOptionsTray()
     }
 
     private func closeOptionsTray() {

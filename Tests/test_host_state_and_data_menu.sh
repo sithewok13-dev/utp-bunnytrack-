@@ -295,7 +295,7 @@ if rg -Fq 'SDL_GetRelativeMouseMode' Sources/UT99Host; then
     exit 1
 fi
 rg -Fq 'buttons[.primaryFire]?.setTitle(menuInteractionActive ? "SELECT" : title(for: .primaryFire))' Sources/UT99Host/GoldenPadTouchOverlay.swift
-rg -Fq 'buttons[.pause]?.setTitle(active ? "BACK" : "GAME MENU")' Sources/UT99Host/GoldenPadTouchOverlay.swift
+rg -Fq 'buttons[.pause]?.setTitle(active ? "BACK" : "MENU")' Sources/UT99Host/GoldenPadTouchOverlay.swift
 # UT menus are tapped directly: only MENU (BACK) stays on screen.
 rg -Fq '? action != .pause' Sources/UT99Host/GoldenPadTouchOverlay.swift
 rg -Fq 'return "menuSelect"' Sources/UT99Host/GoldenPadTouchOverlay.swift

@@ -15,6 +15,7 @@ private func near(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat = 0.02) -> 
 private let actionIDs: Set<String> = [
     "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
     "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward",
+    "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt",
 ]
 
 private func verifyContained(_ frames: [String: CGRect], in safe: CGRect, name: String) {
@@ -112,8 +113,8 @@ let phoneRenderer = UT99TouchLayoutGeometry.rendererFrame(
     safeInsets: UT99TouchInsets(top: 0, left: 47, bottom: 21, right: 47),
     isPhone: true
 )
-require(phoneRenderer == CGRect(x: 47, y: 4, width: 750, height: 365),
-        "iPhone renderer did not clear safe edges")
+require(phoneRenderer == CGRect(x: 0, y: 0, width: 844, height: 390),
+        "iPhone renderer must fill the whole screen")
 let tabletRenderer = UT99TouchLayoutGeometry.rendererFrame(
     canvasSize: CGSize(width: 1180, height: 820),
     safeInsets: UT99TouchInsets(top: 20, left: 0, bottom: 20, right: 0),
@@ -158,7 +159,17 @@ for key in ["walk", "customCommand"] {
 }
 require(phone["leftPrimaryFire"]!.midX < phoneSafe.midX, "phone duplicate FIRE left the movement side")
 require(!phone["dodge"]!.intersects(phone["jump"]!), "phone DODGE overlaps JUMP")
-require(phone["dodge"]!.maxY < phone["primaryFire"]!.minY, "phone DODGE must sit above FIRE")
+// The top row (house standard): small buttons that overlap nothing.
+let topRow = ["pause", "mapVote", "team", "suicide", "taunt", "checkpoint", "noCheckpoint"]
+for (name, frames, safe) in [("iPhone", phone, phoneSafe), ("iPad", tablet, tabletSafe)] {
+    for key in topRow {
+        require(frames[key]!.midY - safe.minY < safe.height * 0.2, "\(name) \(key) left the top row")
+        for other in frames.keys where other != key {
+            require(!frames[key]!.intersects(frames[other]!), "\(name) \(key) overlaps \(other)")
+        }
+    }
+}
+require(phone["pause"]!.maxX <= phoneSafe.maxX - 56, "phone MENU must clear the three-dot button")
 require(tablet["dodge"]!.maxY < tablet["jump"]!.minY, "iPad DODGE must sit above JUMP")
 
 // Preserve coverage for the generic custom-placement collision solver used by

@@ -155,19 +155,26 @@ The touch interface is designed as a full-bleed landscape overlay:
   matching movement key, so they behave exactly like keyboard dodging,
   including on servers. An optional look-side flick dodge and a DODGE swipe
   pad are available in Controls & Display.
-- **Bunny Track:** Controls & Display → Apply BT Layout hides combat and
-  inventory buttons, turns ALT into a one-tap ◀ DODGE and the DODGE button
-  (above FIRE) into a one-tap DODGE ▶, keeps FIRE shooting (to join and to
-  hit BT targets), turns the look-side flick off, slows the look curve, and
-  adds a hold-to-walk WALK
-  button and a CUSTOM button that runs a console command you choose
-  (default `suicide`). UTP binds those two to Home and Insert in User.ini
-  each time the game starts.
-- **Menus:** tap MENU for UT's menu (and again to return to the match), hold
-  it for the options tray (profile, keyboard, console, recent servers,
-  MENU/PLAY, layout, settings, more); `•••` stays available. UT menus are
-  tapped directly: drag up or down to scroll a list, long-press to
-  right-click, e.g. to refresh or ping the server list.
+- **Look:** the house touch style shared with the owner's other ports:
+  see-through round buttons with a thin ring, resting at 65% and full when
+  touched; small buttons along the top.
+- **Top row:** TAUNT (a wheel: slide to a taunt and lift, or tap to open it),
+  MAP VOTE (`mutate bdbmapvote votemenu`), TEAM and SUICIDE (each a 0.3 s
+  hold with a ring), and MENU. Bunny Track adds CP and NO CP (they say
+  BTPlusPlus's `!cp` and `!nocp`). UTP binds these commands to keypad keys in
+  User.ini each time the game starts, so a button press runs them exactly as
+  typed.
+- **Bunny Track:** the default profile: a big JUMP with ◀ ▲ ▶ DODGE above it,
+  FIRE and WALK to its left and DUCK in the corner; no weapon buttons (BT
+  servers give the shock rifle). Controls & Display → Apply BT Layout puts it
+  back.
+- **Menus:** tap MENU for UT's menu (and again to return to the match). Hold
+  it for the tray: PROFILE, SENS (look sensitivity, default 2.0x), OPACITY
+  (a slider, 20% to 100%; hold for 100%), FPS, keyboard, CONSOLE, SERVERS,
+  LAYOUT and MORE, with the build's version under it. UTP learns on its own
+  when UT shows a window (menus, map vote) and switches between menu touch
+  and game controls. UT menus are tapped directly: drag up or down to scroll
+  a list, long-press to right-click, e.g. to refresh or ping the server list.
 - **Profiles:** Standard and Bunny Track keep separate layouts and settings.
   Bunny Track is the default; if another profile is picked, UTP switches back
   to Bunny Track on `CTF-BT-` maps.

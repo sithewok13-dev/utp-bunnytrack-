@@ -188,7 +188,8 @@ private enum TouchConfigurationTests {
         // The BT preset hides combat clutter and keeps the BT tools.
         let preset = UT99TouchConfiguration.standard.applyingBunnyTrackPreset()
         require(preset.hiddenActions == UT99TouchConfiguration.bunnyTrackHiddenActions, "BT preset hidden set changed")
-        require(!preset.hiddenActions.contains("walk") && !preset.hiddenActions.contains("customCommand") &&
+        require(!preset.hiddenActions.contains("walk") && preset.hiddenActions.contains("customCommand") &&
+                preset.hiddenActions.isDisjoint(with: ["checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt"]) &&
                 !preset.hiddenActions.contains("jump") && !preset.hiddenActions.contains("crouch") &&
                 !preset.hiddenActions.contains("primaryFire"),
                 "BT preset hid a control a trick-jump run needs")
@@ -200,6 +201,9 @@ private enum TouchConfigurationTests {
         require(!preset.hiddenActions.contains("dodgeForward") &&
                 UT99TouchConfiguration.standard.hiddenActions.contains("dodgeForward"),
                 "▲ DODGE belongs to the BT layout only")
+        require(UT99TouchConfiguration.standard.hiddenActions.isSuperset(of: UT99TouchConfiguration.bunnyTrackOnlyActions) &&
+                UT99TouchConfiguration.standard.hiddenActions.isDisjoint(with: ["suicide", "mapVote", "team", "taunt"]),
+                "Standard shows SUICIDE, MAP VOTE, TEAM and TAUNT but not the checkpoint pair")
 
         // Window-state learner: keeps the word constant within each state
         // and different between them, preferring a one-bit flag.
@@ -240,12 +244,18 @@ private enum TouchConfigurationTests {
                 "binding rewrite touched other lines or sections")
         require(UT99TouchKeyBindings.applying(to: bound, customCommand: "suicide") == bound,
                 "binding rewrite is not idempotent")
+        let commandLines = UT99TouchCommand.allCases.map { "\($0.keyName)=\($0.command)\n" }.joined()
         let added = UT99TouchKeyBindings.applying(to: "[Engine.Input]\nW=MoveForward\n", customCommand: "mutate cp")
-        require(added == "[Engine.Input]\nHome=Walking\nInsert=mutate cp\nW=MoveForward\n",
+        require(added == "[Engine.Input]\nHome=Walking\nInsert=mutate cp\n" + commandLines + "W=MoveForward\n",
                 "missing bindings were not added under [Engine.Input]")
         let section = UT99TouchKeyBindings.applying(to: "[URL]\nMap=Index.unr", customCommand: "suicide")
-        require(section.hasSuffix("\n\n[Engine.Input]\nHome=Walking\nInsert=suicide"),
+        require(section.hasSuffix("\n\n[Engine.Input]\nHome=Walking\nInsert=suicide\n" + commandLines.dropLast()),
                 "missing [Engine.Input] section was not appended")
+        require(bound.contains("\r\nNumPad1=say !cp\r\n") && bound.contains("\r\nNumPad4=mutate bdbmapvote votemenu\r\n"),
+                "touch command bindings were not written")
+        require(Set(UT99TouchCommand.allCases.map(\.keyName)).count == UT99TouchCommand.allCases.count &&
+                Set(UT99TouchCommand.allCases.map(\.sdlScancode)).count == UT99TouchCommand.allCases.count,
+                "two touch commands share a key")
         require(UT99TouchKeyBindings.sanitizedCommand("  suicide\nquit ") == "suicide quit",
                 "command newline was not neutralized")
         require(UT99TouchKeyBindings.sanitizedCommand(String(repeating: "x", count: 500)).count ==

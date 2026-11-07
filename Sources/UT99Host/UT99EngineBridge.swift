@@ -75,7 +75,7 @@ final class UT99EngineBridge {
     init() {
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
-            SettingsKey.lookSensitivity: 1.0,
+            SettingsKey.lookSensitivity: 2.0,
             SettingsKey.invertLookY: false,
             SettingsKey.safeTextures: true,
             SettingsKey.verticalSync: true,
@@ -514,6 +514,8 @@ final class UT99EngineBridge {
         case .use: pushKey(key: 13, pressed: pressed) // Enter=InventoryActivate
         case .crouch: pushKey(key: 99, pressed: pressed) // C=Duck
         case .dodge, .dodgeForward: break // Directional; dodges publish through publishTouchDodge.
+        // Console commands; the host sends them (publishConsoleCommand).
+        case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt: break
         case .walk: pushKey(key: (1 << 30) | 74, pressed: pressed) // Home=Walking, bound by the host
         case .customCommand: pushKey(key: (1 << 30) | 73, pressed: pressed) // Insert=player's command
         case .nextWeapon: if pressed { pushMouseWheel(y: -1) } // MouseWheelDown
@@ -660,7 +662,7 @@ final class UT99EngineBridge {
     }
 
     func publishTouchLook(_ value: CGPoint, active: Bool) {
-        let sensitivity = max(0.25, min(3.0, UserDefaults.standard.double(forKey: SettingsKey.lookSensitivity)))
+        let sensitivity = max(0.25, min(4.0, UserDefaults.standard.double(forKey: SettingsKey.lookSensitivity)))
         let invertY = UserDefaults.standard.bool(forKey: SettingsKey.invertLookY)
         let tuned = UT99TouchInputTuning.transformedLook(
             value,
@@ -1492,6 +1494,16 @@ final class UT99EngineBridge {
 
     /// Run a console command typed by the player (CONSOLE bar, recent-server
     /// reconnect). Uses the same Tab-typed console path as the diagnostics.
+    /// Press and release the key a touch command is bound to (see
+    /// `UT99TouchCommand`; the bindings are written at engine start).
+    func publishTouchCommand(_ command: UT99TouchCommand) {
+        NSLog("UT99TouchBridge command=%@", command.rawValue)
+        // Keypad keys: send the scancode and the keycode, as a real key does.
+        let key = Int32(1 << 30) | command.sdlScancode
+        pushHardwareKey(usage: Int(command.sdlScancode), key: key, pressed: true)
+        pushHardwareKey(usage: Int(command.sdlScancode), key: key, pressed: false)
+    }
+
     func publishConsoleCommand(_ command: String) {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

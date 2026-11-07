@@ -30,7 +30,8 @@ private final class UT99TouchActionButton: UIButton {
         addSubview(markView)
         actionLabel.textAlignment = .center
         actionLabel.adjustsFontSizeToFitWidth = true
-        actionLabel.minimumScaleFactor = 0.72
+        actionLabel.minimumScaleFactor = 0.6
+        actionLabel.numberOfLines = 2
         actionLabel.isUserInteractionEnabled = false
         addSubview(actionLabel)
     }
@@ -76,15 +77,23 @@ private final class UT99TouchActionButton: UIButton {
         accessibilityLabel = title
     }
 
+    /// The house touch look (JK's `iosTouch.m`): a dark 22% face, a 1.5 pt
+    /// white ring at 40% (FIRE's is warm red), white bold text at 85%. An
+    /// untouched button sits at 65%, a touched one at 100%; OPACITY scales
+    /// the whole overlay on top of that.
+    static let idleAlpha: CGFloat = 0.65
+    static let ringColor = UIColor(white: 1, alpha: 0.4)
+    static let fireRingColor = UIColor(red: 1, green: 0.55, blue: 0.45, alpha: 0.6)
+
     private func applyAppearance() {
-        backgroundColor = pressed ? accent.withAlphaComponent(1.0) : accent
-        markView.tintColor = foreground
-        actionLabel.textColor = foreground
+        backgroundColor = UIColor(white: pressed ? 1 : 0, alpha: pressed ? 0.18 : 0.22)
+        markView.tintColor = UIColor(white: 1, alpha: 0.85)
+        actionLabel.textColor = UIColor(white: 1, alpha: 0.85)
         layer.borderColor = editing
             ? UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 0.96).cgColor
-            : UIColor.white.withAlphaComponent(pressed ? 0.68 : 0.36).cgColor
-        layer.borderWidth = editing ? 3 : 2
-        alpha = pressed ? 1 : 0.96
+            : (visualRole == .primary ? Self.fireRingColor : Self.ringColor).cgColor
+        layer.borderWidth = editing ? 3 : 1.5
+        alpha = pressed || editing ? 1 : Self.idleAlpha
     }
 
     override func layoutSubviews() {
@@ -100,10 +109,221 @@ private final class UT99TouchActionButton: UIButton {
                                 y: bounds.midY - symbolSide / 2,
                                 width: symbolSide,
                                 height: symbolSide)
-        actionLabel.font = .systemFont(ofSize: max(10, min(18, side * 0.22)), weight: .bold)
+        // JK's IOSTouch_FontSize: 16 pt from a 40 pt radius, 13 from 25, else 10.
+        let radius = side / 2
+        let size: CGFloat = actionLabel.numberOfLines == 2 && actionLabel.text?.contains("\n") == true
+            ? (radius >= 28 ? 10 : 9)
+            : (radius >= 40 ? 16 : (radius >= 25 ? 13 : 10))
+        actionLabel.font = .boldSystemFont(ofSize: size)
         actionLabel.frame = compact
             ? .zero
-            : bounds.insetBy(dx: 6, dy: 4)
+            : bounds.insetBy(dx: 4, dy: 3)
+    }
+}
+
+/// The house wheel (JK and Sam, guide section 3.2): one slice per item,
+/// clockwise from the bottom left, a cancel gap at the bottom, the game behind
+/// dimmed. Outer radius at most 168 pt with a hole of 0.37 of it; the slice
+/// pointed at pops out 10 pt; a light tick for each slice change.
+final class UT99RadialWheelView: UIView {
+    struct Item {
+        let title: String
+    }
+
+    static let outerMax: CGFloat = 168
+    static let innerFraction: CGFloat = 0.37
+    static let pop: CGFloat = 10
+    static let gapDegrees: CGFloat = 60
+    static let deadRadius: CGFloat = 14
+    static let cancel = -1
+
+    var items: [Item] = [] { didSet { rebuild() } }
+    var title = "" { didSet { refreshCenter() } }
+    var tapHint = "tap one"
+    var slideHint = "slide toward one"
+    /// The item picked; nil when the wheel closes without a pick.
+    var onFinish: ((Int?) -> Void)?
+    /// Open to tap (true) or tracking a slide from the button (false).
+    private(set) var tapMode = false
+    private(set) var highlighted: Int?
+    private var sliceLayers: [CAShapeLayer] = []
+    private var sliceLabels: [UILabel] = []
+    private let centerTitle = UILabel()
+    private let centerHint = UILabel()
+    private let tick = UISelectionFeedbackGenerator()
+    private var outerRadius: CGFloat = 0
+    private var innerRadius: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        isHidden = true
+        for label in [centerTitle, centerHint] {
+            label.textAlignment = .center
+            label.textColor = UIColor(white: 1, alpha: 0.9)
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.6
+            addSubview(label)
+        }
+        centerTitle.font = .boldSystemFont(ofSize: 15)
+        centerHint.font = .systemFont(ofSize: 10, weight: .medium)
+        centerHint.textColor = UIColor(white: 1, alpha: 0.6)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var isOpen: Bool { !isHidden }
+
+    func open(tapMode: Bool) {
+        self.tapMode = tapMode
+        highlighted = nil
+        isHidden = false
+        superview?.bringSubviewToFront(self)
+        tick.prepare()
+        setNeedsLayout()
+        layoutIfNeeded()
+        refreshLooks()
+    }
+
+    func close(picking index: Int?) {
+        guard isOpen else { return }
+        isHidden = true
+        highlighted = nil
+        onFinish?(index.flatMap { $0 >= 0 && $0 < items.count ? $0 : nil })
+    }
+
+    private var span: CGFloat { (360 - Self.gapDegrees) / CGFloat(max(items.count, 1)) }
+    private var startDegrees: CGFloat { 90 + Self.gapDegrees / 2 }
+
+    /// The slice at an angle in UIKit degrees (0 = right, 90 = down).
+    func slice(atDegrees degrees: CGFloat) -> Int {
+        var relative = (degrees - startDegrees).truncatingRemainder(dividingBy: 360)
+        if relative < 0 { relative += 360 }
+        guard relative < 360 - Self.gapDegrees else { return Self.cancel }
+        return min(items.count - 1, Int(relative / span))
+    }
+
+    /// Slide mode: point from where the finger went down to where it is.
+    func track(from origin: CGPoint, to point: CGPoint) {
+        let dx = point.x - origin.x, dy = point.y - origin.y
+        let next: Int? = hypot(dx, dy) < Self.deadRadius ? nil : slice(atDegrees: atan2(dy, dx) * 180 / .pi)
+        setHighlighted(next)
+    }
+
+    private func setHighlighted(_ next: Int?) {
+        guard next != highlighted else { return }
+        highlighted = next
+        if next != nil { tick.selectionChanged() }
+        refreshLooks()
+    }
+
+    private func item(at point: CGPoint) -> Int? {
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let dx = point.x - center.x, dy = point.y - center.y
+        let distance = hypot(dx, dy)
+        guard distance >= innerRadius, distance <= outerRadius + Self.pop else { return nil }
+        return slice(atDegrees: atan2(dy, dx) * 180 / .pi)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        isOpen && tapMode ? self : nil
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        setHighlighted(item(at: touch.location(in: self)))
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        setHighlighted(item(at: touch.location(in: self)))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        // A slice picks it; the gap or anywhere else closes with no change.
+        close(picking: item(at: touch.location(in: self)))
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        setHighlighted(nil)
+    }
+
+    private func rebuild() {
+        sliceLayers.forEach { $0.removeFromSuperlayer() }
+        sliceLabels.forEach { $0.removeFromSuperview() }
+        sliceLayers = items.map { _ in
+            let layer = CAShapeLayer()
+            layer.lineWidth = 1.5
+            self.layer.insertSublayer(layer, at: 0)
+            return layer
+        }
+        sliceLabels = items.map { item in
+            let label = UILabel()
+            label.text = item.title
+            label.textAlignment = .center
+            label.font = .boldSystemFont(ofSize: 12)
+            label.textColor = UIColor(white: 1, alpha: 0.9)
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.6
+            addSubview(label)
+            return label
+        }
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        outerRadius = min(Self.outerMax, min(bounds.width, bounds.height) / 2 - 12)
+        innerRadius = outerRadius * Self.innerFraction
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let labelRadius = (innerRadius + outerRadius) / 2
+        for (index, label) in sliceLabels.enumerated() {
+            let mid = (startDegrees + span * (CGFloat(index) + 0.5)) * .pi / 180
+            label.bounds = CGRect(x: 0, y: 0, width: min(76, outerRadius - innerRadius), height: 18)
+            label.center = CGPoint(x: center.x + cos(mid) * labelRadius, y: center.y + sin(mid) * labelRadius)
+        }
+        centerTitle.frame = CGRect(x: center.x - innerRadius + 6, y: center.y - 14, width: (innerRadius - 6) * 2, height: 18)
+        centerHint.frame = CGRect(x: center.x - innerRadius + 6, y: center.y + 4, width: (innerRadius - 6) * 2, height: 14)
+        refreshLooks()
+    }
+
+    private func refreshLooks() {
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        for (index, layer) in sliceLayers.enumerated() {
+            let a0 = (startDegrees + span * CGFloat(index)) * .pi / 180
+            let a1 = a0 + span * .pi / 180
+            let mid = (a0 + a1) / 2
+            let pointed = highlighted == index
+            let offset = pointed ? Self.pop : 0
+            let c = CGPoint(x: center.x + cos(mid) * offset, y: center.y + sin(mid) * offset)
+            let path = UIBezierPath(arcCenter: c, radius: outerRadius, startAngle: a0 + 0.012,
+                                    endAngle: a1 - 0.012, clockwise: true)
+            path.addArc(withCenter: c, radius: innerRadius, startAngle: a1 - 0.012,
+                        endAngle: a0 + 0.012, clockwise: false)
+            path.close()
+            layer.path = path.cgPath
+            layer.fillColor = UIColor(white: pointed ? 0.32 : 0, alpha: pointed ? 0.85 : 0.6).cgColor
+            layer.strokeColor = UIColor(white: 1, alpha: pointed ? 0.9 : 0.4).cgColor
+            if index < sliceLabels.count {
+                sliceLabels[index].transform = CGAffineTransform(translationX: cos(mid) * offset,
+                                                                 y: sin(mid) * offset)
+            }
+        }
+        refreshCenter()
+    }
+
+    private func refreshCenter() {
+        if let highlighted, highlighted >= 0, highlighted < items.count {
+            centerTitle.text = items[highlighted].title
+            centerHint.text = tapMode ? "tap to select" : "lift to select"
+        } else if highlighted == Self.cancel {
+            centerTitle.text = title
+            centerHint.text = "lift to cancel"
+        } else {
+            centerTitle.text = title
+            centerHint.text = tapMode ? tapHint : slideHint
+        }
     }
 }
 
@@ -163,7 +383,18 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         /// One-tap forward dodge. Last, so the button tags of the others
         /// (their index here) do not change.
         case dodgeForward
+        /// Top row (house standard's small 22 pt buttons). Bunny Track's
+        /// checkpoint pair says BTPlusPlus's "!cp" / "!nocp"; SUICIDE and
+        /// TEAM fire after a 0.3 s hold with a ring; MAP VOTE opens the
+        /// server's BDBMapVote window; TAUNT opens the taunt wheel.
+        case checkpoint, noCheckpoint, suicide, mapVote, team, taunt
     }
+
+    /// Top-row actions that fire once, on lift (taps) or after a hold.
+    static let commandActions: Set<Action> = [.checkpoint, .noCheckpoint, .suicide, .mapVote, .team]
+    /// Top-row actions that need a 0.3 s hold with a ring, so a stray touch
+    /// cannot kill the player or move them to the other team.
+    static let holdActions: Set<Action> = [.suicide, .team]
 
     var onAction: ((Action, Bool) -> Void)?
     /// Dodges publish one direction per gesture instead of press/release
@@ -175,6 +406,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     /// MENU was held: the host opens its options tray.
     var onMenuHold: (() -> Void)?
     var onMove: ((CGPoint, Bool) -> Void)?
+    /// A taunt picked on the taunt wheel.
+    var onTaunt: ((UT99TouchCommand) -> Void)?
     var onMenuCursorNudge: ((CGPoint) -> Void)?
     var onLook: ((CGPoint, Bool) -> Void)?
 
@@ -219,6 +452,21 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     private var holdLink: CADisplayLink?
     private let holdRing = CAShapeLayer()
     static let menuHoldSeconds: CFTimeInterval = 0.45
+    /// UT99 player taunts (PlayerPawn's Taunt and Speech execs). VOICE plays
+    /// one of the current voice pack's first four taunt lines at random.
+    static let taunts: [(title: String, commands: [UT99TouchCommand])] = [
+        ("WAVE", [.tauntWave]),
+        ("VICTORY", [.tauntVictory]),
+        ("TAUNT", [.tauntTaunt]),
+        ("THRUST", [.tauntThrust]),
+        ("VOICE", [.voice0, .voice1, .voice2, .voice3]),
+    ]
+    static let wheelOpenSlide: CGFloat = 10
+    static let wheelHoldSeconds: CFTimeInterval = 0.3
+    private let tauntWheel = UT99RadialWheelView()
+    private var wheelOrigin: CGPoint?
+    private var wheelDownTime: CFTimeInterval = 0
+    private var wheelLink: CADisplayLink?
     static let customHoldSeconds: CFTimeInterval = 0.3
     private(set) var editingLayout = false
     private(set) var testingLayout = false
@@ -283,6 +531,76 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         configureSurface()
         configureButtons()
         configureLayoutEditor()
+        configureTauntWheel()
+    }
+
+    private func configureTauntWheel() {
+        tauntWheel.items = Self.taunts.map { UT99RadialWheelView.Item(title: $0.title) }
+        tauntWheel.title = "TAUNT"
+        tauntWheel.tapHint = "tap a taunt"
+        tauntWheel.slideHint = "slide toward a taunt"
+        tauntWheel.onFinish = { [weak self] index in
+            guard let self, let index, let command = Self.taunts[index].commands.randomElement() else { return }
+            self.onTaunt?(command)
+        }
+        addSubview(tauntWheel)
+    }
+
+    // MARK: Taunt wheel button (house wheel gestures)
+
+    @objc private func wheelTouchBegan(_ sender: UIButton, forEvent event: UIEvent) {
+        guard !editingLayout, !menuInteractionActive, !tauntWheel.isOpen,
+              let touch = event.touches(for: sender)?.first,
+              let button = sender as? UT99TouchActionButton else { return }
+        wheelOrigin = touch.location(in: self)
+        wheelDownTime = CACurrentMediaTime()
+        updateAppearance(of: button, for: .taunt, pressed: true)
+        wheelLink?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(wheelHoldTick))
+        link.add(to: .main, forMode: .common)
+        wheelLink = link
+    }
+
+    @objc private func wheelHoldTick() {
+        guard wheelOrigin != nil, !tauntWheel.isOpen,
+              CACurrentMediaTime() - wheelDownTime >= Self.wheelHoldSeconds else { return }
+        stopWheelTimer()
+        tauntWheel.open(tapMode: true)
+    }
+
+    private func stopWheelTimer() {
+        wheelLink?.invalidate()
+        wheelLink = nil
+    }
+
+    @objc private func wheelTouchMoved(_ sender: UIButton, forEvent event: UIEvent) {
+        guard let origin = wheelOrigin, let touch = event.touches(for: sender)?.first else { return }
+        let point = touch.location(in: self)
+        if !tauntWheel.isOpen, hypot(point.x - origin.x, point.y - origin.y) >= Self.wheelOpenSlide {
+            stopWheelTimer()
+            tauntWheel.open(tapMode: false)
+        }
+        if tauntWheel.isOpen && !tauntWheel.tapMode { tauntWheel.track(from: origin, to: point) }
+    }
+
+    @objc private func wheelTouchEnded(_ sender: UIButton, forEvent event: UIEvent) {
+        stopWheelTimer()
+        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: .taunt, pressed: false) }
+        defer { wheelOrigin = nil }
+        guard wheelOrigin != nil else { return }
+        if tauntWheel.isOpen && !tauntWheel.tapMode {
+            tauntWheel.close(picking: tauntWheel.highlighted)
+        } else if !tauntWheel.isOpen {
+            // A quick tap opens the wheel to tap.
+            tauntWheel.open(tapMode: true)
+        }
+    }
+
+    @objc private func wheelTouchCancelled(_ sender: UIButton) {
+        stopWheelTimer()
+        if let button = sender as? UT99TouchActionButton { updateAppearance(of: button, for: .taunt, pressed: false) }
+        wheelOrigin = nil
+        if tauntWheel.isOpen && !tauntWheel.tapMode { tauntWheel.close(picking: nil) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -299,6 +617,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         super.layoutSubviews()
         let size = bounds.size
         guard size.width > 0, size.height > 0 else { return }
+        tauntWheel.frame = bounds
 
         if traitCollection.userInterfaceIdiom != .pad || size.height < 500 {
             layoutPhoneControls(in: size)
@@ -560,6 +879,21 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
                         return true
                     }
                 }
+            } else if action == .taunt {
+                // TAUNT: slide 10 pt to open the wheel at once and lift on a
+                // taunt; a tap or a 0.3 s hold opens it to tap (house wheel).
+                button.addTarget(self, action: #selector(wheelTouchBegan(_:forEvent:)), for: .touchDown)
+                button.addTarget(self, action: #selector(wheelTouchMoved(_:forEvent:)),
+                                 for: [.touchDragInside, .touchDragOutside])
+                button.addTarget(self, action: #selector(wheelTouchEnded(_:forEvent:)),
+                                 for: [.touchUpInside, .touchUpOutside])
+                button.addTarget(self, action: #selector(wheelTouchCancelled(_:)), for: [.touchCancel])
+            } else if Self.commandActions.contains(action) {
+                // Fire once: on lift for a tap, or when a hold's ring fills.
+                button.addTarget(self, action: #selector(holdTouchBegan(_:)), for: .touchDown)
+                button.addTarget(self, action: #selector(holdTouchEnded(_:)), for: [.touchUpInside])
+                button.addTarget(self, action: #selector(holdTouchCancelled(_:)),
+                                 for: [.touchUpOutside, .touchCancel, .touchDragExit])
             } else if action == .pause || action == .customCommand {
                 // MENU: tap for UT's menu, hold for the options tray.
                 // CUSTOM: hold to confirm (optional). Sliding off cancels.
@@ -880,46 +1214,52 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         refreshActionTitles()
         setNeedsLayout()
         layoutIfNeeded()
-        if let duplicateFire = buttons[.leftPrimaryFire], bounds.width > 0, bounds.height > 0 {
-            placements[Action.walk.rawValue] = UT99TouchPlacement(
-                x: duplicateFire.center.x / bounds.width,
-                y: duplicateFire.center.y / bounds.height,
-                scale: 1.25
-            )
-        }
         _ = placeBunnyTrackButtons()
         savePlacements()
         setNeedsLayout()
         NSLog("UT99 touch Bunny Track layout applied hidden=%lu", touchConfiguration.hiddenActions.count)
     }
 
-    /// Bunny Track's thumb cluster: ◀ DODGE, ▲ DODGE and DODGE ▶ above JUMP,
-    /// FIRE to JUMP's left, all within a short reach of the jump thumb.
-    /// Returns false (placing nothing) before the overlay has a size.
+    /// The frames the current device class lays out from (before placements).
+    private func referenceFrames() -> [String: CGRect] {
+        let safe = bounds.inset(by: safeAreaInsets)
+        if traitCollection.userInterfaceIdiom != .pad || bounds.height < 500 {
+            return UT99EctoPadReferenceLayout.phoneFrames(
+                safeRect: safe, profileScale: touchProfile.scale * globalScale,
+                leftHanded: touchConfiguration.leftHanded)
+        }
+        return UT99EctoPadReferenceLayout.tabletFrames(
+            safeRect: safe, scale: touchProfile.scale * globalScale,
+            leftHanded: touchConfiguration.leftHanded)
+    }
+
+    /// Bunny Track's right-thumb cluster, all in the lower right: a big
+    /// JUMP, DUCK in the corner, FIRE and WALK to JUMP's left, and ◀ ▲ ▶
+    /// DODGE above JUMP like arrow keys. Points are measured from the safe
+    /// area's lower-right corner on a 400 pt tall reference and scale with
+    /// the screen. Returns false (placing nothing) before the overlay has a
+    /// size.
     @discardableResult
     func placeBunnyTrackButtons() -> Bool {
-        layoutIfNeeded()
-        guard let jump = buttons[.jump], bounds.width > 0, bounds.height > 0,
-              jump.bounds.width > 0 else { return false }
-        let center = jump.center
-        let size = jump.bounds.width
-        let side: CGFloat = touchConfiguration.leftHanded ? -1 : 1
+        guard bounds.width > 0, bounds.height > 0 else { return false }
         let safe = bounds.inset(by: safeAreaInsets)
-        func place(_ action: Action, dx: CGFloat, dy: CGFloat, scale: CGFloat) {
-            // Keep a medium button's radius inside the safe area.
-            let radius = size * 0.4 * scale
-            let x = min(max(center.x + side * dx * size, safe.minX + radius), safe.maxX - radius)
-            let y = min(max(center.y + dy * size, safe.minY + radius), safe.maxY - radius)
+        let frames = referenceFrames()
+        let k = min(1.3, max(0.8, safe.height / 400)) * touchProfile.scale * globalScale
+        let leftHanded = touchConfiguration.leftHanded
+        func place(_ action: Action, fromRight: CGFloat, up: CGFloat, diameter: CGFloat) {
+            guard let base = frames[action.rawValue]?.width, base > 0 else { return }
+            let x = leftHanded ? safe.minX + fromRight * k : safe.maxX - fromRight * k
             placements[action.rawValue] = UT99TouchPlacement(
-                x: x / bounds.width, y: y / bounds.height, scale: scale
-            )
+                x: x / bounds.width, y: (safe.maxY - up * k) / bounds.height,
+                scale: diameter * k / base)
         }
-        // ◀ and ▶ level with each other above JUMP, ▲ a little higher
-        // between them, like arrow keys; FIRE to JUMP's left.
-        place(.alternateFire, dx: -0.8, dy: -1.0, scale: 1)
-        place(.dodge, dx: 0.8, dy: -1.0, scale: 1)
-        place(.dodgeForward, dx: 0, dy: -1.65, scale: 1)
-        place(.primaryFire, dx: -1.15, dy: 0.1, scale: 1.25)
+        place(.jump, fromRight: 110, up: 112, diameter: 84)
+        place(.crouch, fromRight: 38, up: 40, diameter: 58)
+        place(.primaryFire, fromRight: 214, up: 72, diameter: 62)
+        place(.walk, fromRight: 226, up: 160, diameter: 50)
+        place(.alternateFire, fromRight: 170, up: 205, diameter: 58)
+        place(.dodge, fromRight: 50, up: 205, diameter: 58)
+        place(.dodgeForward, fromRight: 110, up: 262, diameter: 58)
         savePlacements()
         setNeedsLayout()
         return true
@@ -962,8 +1302,15 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     func displayTitle(for action: Action) -> String { title(for: action) }
 
+    /// Where a visible button is, in overlay coordinates (nil when hidden).
+    func buttonFrame(_ action: Action) -> CGRect? {
+        guard let button = buttons[action], !button.isHidden else { return nil }
+        return button.frame
+    }
+
     func setTouchOpacity(_ value: CGFloat) {
-        touchOpacity = max(0.25, min(1.0, value))
+        // The house OPACITY range: 20% to 100% (untouched buttons are 65% of it).
+        touchOpacity = max(0.2, min(1.0, value))
         UserDefaults.standard.set(Double(touchOpacity), forKey: Self.opacityDefaultsKey)
         alpha = touchOpacity
     }
@@ -1008,7 +1355,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         buttons[.primaryFire]?.accessibilityHint = active
             ? "Clicks the current Unreal Tournament menu item."
             : accessibilityHint(for: .primaryFire)
-        buttons[.pause]?.setTitle(active ? "BACK" : "GAME MENU")
+        buttons[.pause]?.setTitle(active ? "BACK" : "MENU")
         setNeedsLayout()
     }
 
@@ -1393,11 +1740,21 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         action == .pause ? Self.menuHoldSeconds : Self.customHoldSeconds
     }
 
+    /// A top-row command that needs no hold fires on its tap's lift.
+    private func isTapCommand(_ action: Action) -> Bool {
+        Self.commandActions.contains(action) && !Self.holdActions.contains(action)
+    }
+
     @objc private func holdTouchBegan(_ rawSender: UIButton) {
         guard !editingLayout, let sender = rawSender as? UT99TouchActionButton,
               let action = action(for: sender.tag) else { return }
         if action == .customCommand && !touchConfiguration.customHoldToConfirm {
             buttonDown(sender)
+            return
+        }
+        if isTapCommand(action) {
+            updateAppearance(of: sender, for: action, pressed: true)
+            actionHaptic.impactOccurred(intensity: 0.46)
             return
         }
         finishHold(cancelled: true)
@@ -1408,10 +1765,14 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         updateAppearance(of: sender, for: action, pressed: true)
         actionHaptic.prepare()
         holdRing.removeFromSuperlayer()
-        let inset = sender.bounds.insetBy(dx: 2, dy: 2)
-        holdRing.path = UIBezierPath(roundedRect: inset, cornerRadius: min(inset.width, inset.height) / 2).cgPath
+        // JK's IOSTouch_MakeHoldRing: a blue ring 2.5 pt inside the edge,
+        // filling clockwise from the top.
+        let ringRadius = min(sender.bounds.width, sender.bounds.height) / 2 - 2.5
+        holdRing.path = UIBezierPath(arcCenter: CGPoint(x: sender.bounds.midX, y: sender.bounds.midY),
+                                     radius: max(ringRadius, 1), startAngle: -.pi / 2,
+                                     endAngle: 1.5 * .pi, clockwise: true).cgPath
         holdRing.fillColor = UIColor.clear.cgColor
-        holdRing.strokeColor = UIColor(red: 0.35, green: 0.92, blue: 0.88, alpha: 1).cgColor
+        holdRing.strokeColor = UIColor(red: 0.47, green: 0.78, blue: 1, alpha: 0.95).cgColor
         holdRing.lineWidth = 3
         holdRing.strokeEnd = 0
         sender.layer.addSublayer(holdRing)
@@ -1445,6 +1806,14 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
             buttonUp(sender)
             return
         }
+        if isTapCommand(action) {
+            updateAppearance(of: sender, for: action, pressed: false)
+            if !editingLayout && !menuInteractionActive {
+                onAction?(action, true)
+                onAction?(action, false)
+            }
+            return
+        }
         // A short MENU tap is UT's own menu (Escape); a short CUSTOM tap is
         // deliberately nothing.
         let tapped = holdAction == action && !holdFired
@@ -1457,6 +1826,10 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     @objc private func holdTouchCancelled(_ rawSender: UIButton) {
         guard let sender = rawSender as? UT99TouchActionButton, let action = action(for: sender.tag) else { return }
+        if isTapCommand(action) {
+            updateAppearance(of: sender, for: action, pressed: false)
+            return
+        }
         if action == .customCommand && !touchConfiguration.customHoldToConfirm && holdAction == nil {
             buttonUp(sender)
             return
@@ -1544,6 +1917,9 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         }
         moveAnchor = nil
         finishHold(cancelled: true)
+        stopWheelTimer()
+        wheelOrigin = nil
+        tauntWheel.close(picking: nil)
         dodgeTouchOrigin = nil
         if let dodge = buttons[.dodge] { updateAppearance(of: dodge, for: .dodge, pressed: false) }
         finishLookInput()
@@ -1584,7 +1960,13 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .nextWeapon: "WPN +"
         case .previousWeapon: "WPN −"
         case .scoreboard: "SCORE"
-        case .pause: "GAME MENU"
+        case .pause: "MENU"
+        case .checkpoint: "CP"
+        case .noCheckpoint: "NO CP"
+        case .suicide: "SUICIDE"
+        case .mapVote: "MAP\nVOTE"
+        case .team: "TEAM"
+        case .taunt: "TAUNT"
         }
     }
 
@@ -1603,6 +1985,12 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .previousWeapon: "chevron.backward"
         case .scoreboard: "list.number"
         case .pause: "pause.fill"
+        case .checkpoint: "flag.fill"
+        case .noCheckpoint: "flag.slash"
+        case .suicide: "xmark.octagon"
+        case .mapVote: "checklist"
+        case .team: "arrow.left.arrow.right"
+        case .taunt: "face.smiling"
         }
     }
 
@@ -1633,7 +2021,13 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .nextWeapon: "Selects the next weapon"
         case .previousWeapon: "Selects the previous weapon"
         case .scoreboard: "Shows the match scoreboard"
-        case .pause: "Opens the original Unreal Tournament menu"
+        case .pause: "Opens the original Unreal Tournament menu. Hold for options."
+        case .checkpoint: "Says !cp: sets a Bunny Track checkpoint"
+        case .noCheckpoint: "Says !nocp: removes your Bunny Track checkpoint"
+        case .suicide: "Hold to respawn"
+        case .mapVote: "Opens the server's map vote"
+        case .team: "Hold to switch between the red and blue team"
+        case .taunt: "Opens the taunt wheel"
         }
     }
 
@@ -1650,6 +2044,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .dodge, .dodgeForward: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
         case .use, .scoreboard, .nextWeapon, .previousWeapon, .walk, .customCommand: UIColor(white: 0.22, alpha: 0.88)
         case .pause: UIColor(white: 0.28, alpha: 0.92)
+        case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt: UIColor(white: 0.22, alpha: 0.88)
         }
     }
 
