@@ -542,7 +542,7 @@ final class UT99EngineBridge {
         case .jump: pushKey(key: 32, pressed: pressed) // Space=Jump
         case .use: pushKey(key: 13, pressed: pressed) // Enter=InventoryActivate
         case .crouch: pushKey(key: 99, pressed: pressed) // C=Duck
-        case .dodge, .dodgeForward: break // Directional; dodges publish through publishTouchDodge.
+        case .dodge, .dodgeForward, .dodgeLeft: break // Directional; dodges publish through publishTouchDodge.
         // Console commands; the host sends them (publishConsoleCommand).
         case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt, .camera, .view, .cheat: break
         case .walk: pushKey(key: (1 << 30) | 74, pressed: pressed) // Home=Walking, bound by the host

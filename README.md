@@ -153,8 +153,8 @@ The touch interface is designed as a full-bleed landscape overlay:
 - **Right thumb:** look/aim stick, a large JUMP, FIRE above it, ALT, and DUCK
   in the lower-right corner. Dodges send UT's normal double-tap on the
   matching movement key, so they behave exactly like keyboard dodging,
-  including on servers. An optional look-side flick dodge and a DODGE swipe
-  pad are available in Controls & Display.
+  including on servers. Both profiles have one-tap ◀ ▲ ▶ DODGE buttons;
+  an optional look-side flick dodge is in Controls & Display.
 - **Look:** the house touch style shared with the owner's other ports:
   see-through round buttons with a thin ring, resting at 65% and full when
   touched; small buttons along the top.
@@ -174,11 +174,12 @@ The touch interface is designed as a full-bleed landscape overlay:
   cheats). While it's on, a CHEAT emblem on the top row switches it off
   with a 0.5 s hold. It comes back on each new map.
 - **Bunny Track:** the default profile: a big JUMP with ◀ ▲ ▶ DODGE above it,
-  FIRE and WALK to its left and DUCK in the corner; no weapon buttons (BT
+  FIRE and WALK to its left, DUCK in the corner and CP / NO CP on top; no weapon buttons (BT
   servers give the shock rifle). Controls & Display → Apply BT Layout puts it
   back.
 - **DM (the Standard profile):** the house right-thumb cluster: a big FIRE
-  in the corner, ALT to its left, JUMP up-left, DUCK above FIRE. **NEXT WPN**
+  in the corner, ALT to its left, JUMP up-left with ◀ ▲ ▶ DODGE around its
+  top, DUCK above FIRE. **NEXT WPN**
   (top left): tap for the next weapon; slide off it or hold it for the
   weapon wheel, one slice per UT weapon with a drawn picture of each, and
   lift or tap to take it (`getweapon`). Controls & Display → Apply DM Layout

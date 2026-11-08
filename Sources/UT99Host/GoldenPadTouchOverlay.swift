@@ -520,6 +520,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         /// selfie), VIEW (first / third person) and the CHEAT emblem (shown
         /// while the cheat is on; hold 0.5 s to switch it off or on).
         case camera, view, cheat
+        /// One-tap left dodge, for profiles where ALT keeps alternate fire.
+        case dodgeLeft
     }
 
     /// Top-row actions that fire once, on lift (taps) or after a hold.
@@ -1477,7 +1479,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     }
 
     /// The DM (Standard) layout: the house right-thumb cluster (a big FIRE in
-    /// the corner, ALT to its left, JUMP up-left, DUCK above it) and NEXT WPN
+    /// the corner, ALT to its left, JUMP up-left, DUCK above it, ◀ ▲ ▶ DODGE
+    /// around JUMP's top) and NEXT WPN
     /// first on the top row, where its weapon wheel opens.
     func applyDeathmatchLayout() {
         releaseActiveInputs()
@@ -1510,7 +1513,11 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         place(.primaryFire, fromRight: 70, up: 72, diameter: 84)
         place(.alternateFire, fromRight: 176, up: 52, diameter: 56)
         place(.jump, fromRight: 160, up: 140, diameter: 62)
-        place(.crouch, fromRight: 70, up: 178, diameter: 58)
+        place(.crouch, fromRight: 38, up: 165, diameter: 54)
+        // ◀ and DODGE ▶ level either side of JUMP's top, ▲ DODGE just above it.
+        place(.dodgeLeft, fromRight: 222, up: 198, diameter: 52)
+        place(.dodge, fromRight: 100, up: 198, diameter: 52)
+        place(.dodgeForward, fromRight: 160, up: 222, diameter: 52)
         // NEXT WPN in CUSTOM's top-left slot (CUSTOM is hidden here).
         if let slot = frames[Action.customCommand.rawValue], let base = frames[Action.nextWeapon.rawValue]?.width,
            base > 0 {
@@ -1985,6 +1992,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
     private func dodgeDirection(for action: Action) -> UT99DodgeDirection? {
         guard !menuInteractionActive else { return nil }
         if action == .dodgeForward { return .forward }
+        if action == .dodgeLeft { return .left }
         guard touchConfiguration.fireButtonsDodge else { return nil }
         return action == .alternateFire ? .left : nil
     }
@@ -2169,18 +2177,13 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     @objc private func dodgeTouchBegan(_ sender: UIButton, forEvent event: UIEvent) {
         guard !editingLayout, !menuInteractionActive,
-              let button = sender as? UT99TouchActionButton,
-              let touch = event.touches(for: sender)?.first else { return }
+              let button = sender as? UT99TouchActionButton else { return }
         updateAppearance(of: button, for: .dodge, pressed: true)
-        if touchConfiguration.fireButtonsDodge {
-            // DODGE ▶: one tap, no swipe, to pair with ALT's ◀ DODGE.
-            dodgeTouchOrigin = nil
-            if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
-            onDodge?(.right, false)
-            return
-        }
-        dodgeTouchOrigin = touch.location(in: self)
-        if touchConfiguration.dodgeHaptics { dodgeHaptic.prepare() }
+        // DODGE ▶: one tap, no swipe, to pair with ◀ DODGE (the swipe pad is
+        // gone; dodgeTouchMoved only acts if a swipe origin is ever set).
+        dodgeTouchOrigin = nil
+        if touchConfiguration.dodgeHaptics { dodgeHaptic.impactOccurred(intensity: 0.9) }
+        onDodge?(.right, false)
     }
 
     @objc private func dodgeTouchMoved(_ sender: UIButton, forEvent event: UIEvent) {
@@ -2258,7 +2261,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func title(for action: Action) -> String {
         switch action {
-        case .dodge where touchConfiguration.fireButtonsDodge: "DODGE ▶"
+        case .dodge: "DODGE ▶"
+        case .dodgeLeft: "◀ DODGE"
         case .alternateFire where touchConfiguration.fireButtonsDodge: "◀ DODGE"
         case .dodgeForward: "▲ DODGE"
         case .primaryFire, .leftPrimaryFire: "FIRE"
@@ -2266,7 +2270,6 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .jump: "JUMP"
         case .use: "USE"
         case .crouch: "DUCK"
-        case .dodge: "DODGE"
         case .walk: "WALK"
         case .customCommand: "CUSTOM"
         case .nextWeapon: "NEXT\nWPN"
@@ -2294,6 +2297,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .crouch: "arrow.down"
         case .dodge: "arrow.left.and.right"
         case .dodgeForward: "arrow.up.to.line"
+        case .dodgeLeft: "arrow.left"
         case .walk: "figure.walk"
         case .customCommand: "star.fill"
         case .nextWeapon: "chevron.forward"
@@ -2326,7 +2330,8 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
 
     private func accessibilityHint(for action: Action) -> String {
         switch action {
-        case .dodge where touchConfiguration.fireButtonsDodge: "Dodges right"
+        case .dodge: "Dodges right"
+        case .dodgeLeft: "Dodges left"
         case .alternateFire where touchConfiguration.fireButtonsDodge: "Dodges left"
         case .dodgeForward: "Dodges forward"
         case .primaryFire, .leftPrimaryFire: "Shoots the current weapon"
@@ -2334,7 +2339,6 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .jump: "Jumps"
         case .use: "Activates doors, lifts, and inventory"
         case .crouch: "Crouches while held"
-        case .dodge: "Swipe left or right to side dodge, or up or down to dodge forward or back"
         case .walk: "Walks slowly and precisely while held"
         case .customCommand: "Runs the console command set in Controls and Display"
         case .nextWeapon: "Selects the next weapon"
@@ -2363,7 +2367,7 @@ final class GoldenPadTouchOverlay: UIView, UIGestureRecognizerDelegate {
         case .primaryFire, .leftPrimaryFire: UIColor(red: 0.08, green: 0.56, blue: 0.29, alpha: 0.92)
         case .alternateFire: UIColor(red: 0.78, green: 0.10, blue: 0.13, alpha: 0.92)
         case .jump, .crouch: UIColor(white: 0.72, alpha: 0.92)
-        case .dodge, .dodgeForward: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
+        case .dodge, .dodgeForward, .dodgeLeft: UIColor(red: 0.10, green: 0.40, blue: 0.62, alpha: 0.92)
         case .use, .scoreboard, .nextWeapon, .previousWeapon, .walk, .customCommand: UIColor(white: 0.22, alpha: 0.88)
         case .pause: UIColor(white: 0.28, alpha: 0.92)
         case .checkpoint, .noCheckpoint, .suicide, .mapVote, .team, .taunt, .camera, .view, .cheat:

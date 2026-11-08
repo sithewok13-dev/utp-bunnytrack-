@@ -16,7 +16,7 @@ private let actionIDs: Set<String> = [
     "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
     "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward",
     "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt",
-    "camera", "view", "cheat",
+    "camera", "view", "cheat", "dodgeLeft",
 ]
 
 private func verifyContained(_ frames: [String: CGRect], in safe: CGRect, name: String) {
@@ -143,7 +143,7 @@ require(phone["primaryFire"]!.maxY < phone["jump"]!.minY, "phone FIRE must sit a
 require(near(phone["crouch"]!.maxX, phoneSafe.maxX, tolerance: 20) && near(phone["crouch"]!.maxY, phoneSafe.maxY, tolerance: 20),
         "phone DUCK left the lower-right corner")
 require(tablet["crouch"]!.midY > tablet["jump"]!.maxY, "iPad DUCK must sit below JUMP")
-let phoneRightControls = ["primaryFire", "alternateFire", "jump", "crouch", "dodge", "dodgeForward"]
+let phoneRightControls = ["primaryFire", "alternateFire", "jump", "crouch", "dodge", "dodgeForward", "dodgeLeft"]
 for (offset, firstKey) in phoneRightControls.enumerated() {
     for secondKey in phoneRightControls.dropFirst(offset + 1) {
         require(!phone[firstKey]!.intersects(phone[secondKey]!),

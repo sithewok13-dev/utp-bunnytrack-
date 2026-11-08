@@ -6,19 +6,21 @@ struct UT99TouchConfiguration: Codable, Equatable {
         "primaryFire", "leftPrimaryFire", "alternateFire", "jump", "crouch", "dodge", "walk", "use",
         "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "pause", "dodgeForward",
         "checkpoint", "noCheckpoint", "suicide", "mapVote", "team", "taunt",
-        "camera", "view", "cheat"
+        "camera", "view", "cheat", "dodgeLeft"
     ]
     /// Controls the Bunny Track layout hides: combat and inventory buttons a
     /// trick-jump run never needs (BT servers give the shock rifle only, so
-    /// no weapon switching), and CUSTOM, which the top row's SUICIDE replaces.
+    /// no weapon switching), CUSTOM, which the top row's SUICIDE replaces,
+    /// and the separate ◀ DODGE, since ALT dodges left there.
     static let bunnyTrackHiddenActions: Set<String> = [
-        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "cheat"
+        "leftPrimaryFire", "use", "nextWeapon", "previousWeapon", "scoreboard", "customCommand", "cheat",
+        "dodgeLeft"
     ]
-    /// The DM (Standard) layout: FIRE, ALT, JUMP and DUCK on the right thumb,
-    /// NEXT WPN with its weapon wheel on the top row; no dodge buttons, no
-    /// d-pad and no checkpoint pair.
+    /// The DM (Standard) layout: FIRE, ALT, JUMP, DUCK and ◀ ▲ ▶ DODGE on the
+    /// right thumb, NEXT WPN with its weapon wheel on the top row; no d-pad
+    /// and no checkpoint pair.
     static let deathmatchHiddenActions: Set<String> = [
-        "leftPrimaryFire", "use", "previousWeapon", "scoreboard", "customCommand", "dodge", "dodgeForward",
+        "leftPrimaryFire", "use", "previousWeapon", "scoreboard", "customCommand",
         "walk", "checkpoint", "noCheckpoint", "cheat"
     ]
     /// Bunny Track's checkpoint pair; other profiles hide it.
@@ -101,9 +103,8 @@ struct UT99TouchConfiguration: Codable, Equatable {
 
     static let standard = UT99TouchConfiguration(
         leftHanded: false,
-        // The look-side flick replaces the DODGE pad, and WALK and CUSTOM are
-        // Bunny Track tools; the BT layout turns the last two on.
-        hiddenActions: ["scoreboard", "dodge", "walk", "customCommand", "dodgeForward",
+        // WALK, CUSTOM and the checkpoint pair are Bunny Track tools.
+        hiddenActions: ["scoreboard", "walk", "customCommand",
                         "checkpoint", "noCheckpoint", "cheat"],
         lookAcceleration: 0.45,
         lookDeadZone: 0.00025,
@@ -186,6 +187,12 @@ struct UT99TouchConfiguration: Codable, Equatable {
         if !defaults.bool(forKey: forwardDodgeMigrationKey) {
             configuration.hiddenActions.insert("dodgeForward")
             defaults.set(true, forKey: forwardDodgeMigrationKey)
+        }
+        // ◀ DODGE is new; it starts hidden and the DM profile shows it.
+        let leftDodgeMigrationKey = "ut99.touch.migration.leftDodge.v1"
+        if !defaults.bool(forKey: leftDodgeMigrationKey) {
+            configuration.hiddenActions.insert("dodgeLeft")
+            defaults.set(true, forKey: leftDodgeMigrationKey)
         }
         configuration.save(to: defaults)
         return configuration

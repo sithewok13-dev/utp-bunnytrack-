@@ -181,6 +181,7 @@ enum UT99EctoPadReferenceLayout {
             frame("crouch", 0.9661016949, 0.9000000000, 62, 62),
             frame("dodge", 0.9661016949, 0.4000000000, 62, 62),
             frame("dodgeForward", 0.9000000000, 0.4000000000, 62, 62),
+            frame("dodgeLeft", 0.8340000000, 0.4000000000, 62, 62),
             frame("pause", 0.9400000000, 0.1050000000, 134, 62),
             // Top row (house standard): TAUNT and Bunny Track's checkpoint pair
             // on the left, SUICIDE / TEAM / MAP VOTE left of MENU.
@@ -252,6 +253,8 @@ enum UT99EctoPadReferenceLayout {
                            width: medium, height: medium)
         let dodgeForward = CGRect(x: alt.minX, y: alt.minY - medium - 10 * scale,
                                   width: medium, height: medium)
+        let dodgeLeft = CGRect(x: dodge.minX - medium - 10 * scale, y: alt.minY,
+                               width: medium, height: medium)
         // Top row: the house standard's small 22 pt buttons, 50 pt apart.
         // MENU sits left of the host's three-dot button (safe maxX - 52).
         let top = 44 * scale
@@ -275,6 +278,7 @@ enum UT99EctoPadReferenceLayout {
             "crouch": crouch,
             "dodge": dodge,
             "dodgeForward": dodgeForward,
+            "dodgeLeft": dodgeLeft,
             "pause": topButton(centerX: menuX),
             "mapVote": topButton(centerX: menuX - step),
             "team": topButton(centerX: menuX - step * 2),

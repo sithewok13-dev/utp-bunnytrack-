@@ -6525,6 +6525,36 @@ extension GameViewController: UITextFieldDelegate {
                 _ = try? UT99TouchProfileStore.upsert(saved)
             }
         }
+        // Some saved profiles lost their dodge buttons (and Bunny Track its
+        // CP / NO CP pair). Put both profiles' clusters back where their
+        // layouts place them, once each; needs a laid-out overlay.
+        let restoreKey = "ut99.touch.migration.restoreDodges.v2.\(activeTouchProfileName)"
+        if !defaults.bool(forKey: restoreKey), !touchOverlay.editingLayout {
+            if activeTouchProfileName == UT99TouchProfileName.bunnyTrack, touchOverlay.placeBunnyTrackButtons() {
+                defaults.set(true, forKey: restoreKey)
+                var configuration = touchOverlay.touchConfiguration
+                configuration.flickDodgeEnabled = false
+                configuration.fireButtonsDodge = true
+                touchOverlay.setTouchConfiguration(configuration)
+                for action: GoldenPadTouchOverlay.Action in [.alternateFire, .dodge, .dodgeForward, .walk,
+                                                              .checkpoint, .noCheckpoint, .primaryFire] {
+                    touchOverlay.setAction(action, visible: true)
+                }
+                touchOverlay.setAction(.dodgeLeft, visible: false)
+                if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.bunnyTrack) {
+                    _ = try? UT99TouchProfileStore.upsert(saved)
+                }
+            } else if activeTouchProfileName == UT99TouchProfileName.standard,
+                      touchOverlay.placeDeathmatchButtons() {
+                defaults.set(true, forKey: restoreKey)
+                for action: GoldenPadTouchOverlay.Action in [.dodgeLeft, .dodge, .dodgeForward] {
+                    touchOverlay.setAction(action, visible: true)
+                }
+                if let saved = try? touchOverlay.makeTouchProfile(named: UT99TouchProfileName.standard) {
+                    _ = try? UT99TouchProfileStore.upsert(saved)
+                }
+            }
+        }
         // Bunny Track profiles saved before the dodge buttons used FIRE as a
         // right dodge. Move them to ◀ DODGE (ALT), DODGE ▶ and a shooting FIRE.
         let key = "ut99.touch.migration.bunnyTrackDodgeButtons.v1"

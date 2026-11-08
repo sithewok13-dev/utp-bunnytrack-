@@ -198,14 +198,14 @@ private enum TouchConfigurationTests {
                 !preset.hiddenActions.contains("dodge"),
                 "BT preset must show ◀ DODGE (ALT) and DODGE ▶ buttons")
         require(preset.hiddenActions.contains("leftPrimaryFire"), "BT keeps FIRE on the right thumb only")
-        require(!preset.hiddenActions.contains("dodgeForward") &&
-                UT99TouchConfiguration.standard.hiddenActions.contains("dodgeForward"),
-                "▲ DODGE belongs to the BT layout only")
+        require(!preset.hiddenActions.contains("dodgeForward") && preset.hiddenActions.contains("dodgeLeft"),
+                "BT shows ▲ DODGE; ALT is its ◀ DODGE")
         let dm = UT99TouchConfiguration.standard.applyingDeathmatchPreset()
         require(!dm.fireButtonsDodge && dm.hiddenActions.isDisjoint(with: [
             "primaryFire", "alternateFire", "jump", "crouch", "nextWeapon", "suicide", "mapVote", "team", "taunt",
-            "camera", "view"]) && dm.hiddenActions.isSuperset(of: ["checkpoint", "noCheckpoint", "dodge", "previousWeapon"]),
-                "DM preset: FIRE ALT JUMP DUCK, NEXT WPN and the shared top row; no BT tools")
+            "camera", "view", "dodgeLeft", "dodge", "dodgeForward"]) &&
+                dm.hiddenActions.isSuperset(of: ["checkpoint", "noCheckpoint", "previousWeapon"]),
+                "DM preset: FIRE ALT JUMP DUCK, ◀ ▲ ▶ DODGE, NEXT WPN and the shared top row; no BT tools")
         require(preset.hiddenActions.contains("cheat") && UT99TouchConfiguration.standard.hiddenActions.contains("cheat") &&
                 !preset.hiddenActions.contains("camera") && !preset.hiddenActions.contains("view"),
                 "CAMERA and VIEW show; the CHEAT emblem starts hidden")
