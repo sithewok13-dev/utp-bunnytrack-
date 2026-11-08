@@ -99,8 +99,9 @@ private enum TouchConfigurationTests {
         require(!migrated.flickDodgeEnabled && migrated.flickDodgeDistance == 40 &&
                 migrated.flickDodgeMilliseconds == 150 && migrated.customCommand == "suicide",
                 "legacy configuration did not take standard flick and CUSTOM settings")
-        require(UT99TouchConfiguration.standard.hiddenActions.isSuperset(of: ["dodge", "walk", "customCommand"]),
-                "DODGE pad, WALK and CUSTOM must start hidden outside the BT layout")
+        require(UT99TouchConfiguration.standard.hiddenActions.isSuperset(of: ["walk", "customCommand"]) &&
+                UT99TouchConfiguration.standard.hiddenActions.isDisjoint(with: ["dodge", "dodgeForward", "dodgeLeft"]),
+                "WALK and CUSTOM start hidden outside the BT layout; ◀ ▲ ▶ DODGE show")
 
         var dodge = UT99TouchConfiguration.standard
         dodge.dodgeSwipeDistance = 26
