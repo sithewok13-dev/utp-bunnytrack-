@@ -404,7 +404,9 @@ final class UT99EngineBridge {
     /// the tray's MENU SIZE tries larger values (1.25x and 1.5x of that) as an
     /// experiment, applied at the next start. Menu taps are divided by this.
     static let menuScaleKey = "ut99.menu.guiScale"
-    static let menuScaleSteps: [Double] = [3.0, 3.75, 4.5]
+    /// v469e has no fonts above 3x: larger scales grew the menus but shrank
+    /// their text (owner's test), so 3x is the only step left.
+    static let menuScaleSteps: [Double] = [3.0]
     static var menuGUIScale: Double {
         let stored = UserDefaults.standard.double(forKey: menuScaleKey)
         return menuScaleSteps.contains(stored) ? stored : 3.0

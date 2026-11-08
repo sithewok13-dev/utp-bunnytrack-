@@ -305,9 +305,9 @@ index dee4b19..bee2c37 100644
 +static CGRect UT99AspectGameFrame(UIWindow *hostWindow)
 +{
 +    CGRect hostBounds = hostWindow.bounds;
-+    if (hostBounds.size.width > 0) { /* full screen on every device */
-+        return hostBounds;
-+    }
++    /* Full screen; the host sets a side inset while UT's menus show. */
++    double sideInset = [[NSUserDefaults standardUserDefaults] doubleForKey:@"ut99.renderer.sideInset"];
++    if (hostBounds.size.width > 0) return CGRectInset(hostBounds, MAX(0.0, MIN(sideInset, 120.0)), 0.0);
 +    UIEdgeInsets insets = hostWindow.safeAreaInsets;
 +    insets.top = MAX(insets.top, 4.0);
 +    insets.left = MAX(insets.left, 4.0);

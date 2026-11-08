@@ -2423,6 +2423,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         }
         gameSurfaceInputView.setInputMode(active ? .originalMenu : .gameplayLook)
         touchOverlay.setMenuInteractionActive(active)
+        updateRendererSideInset()
         if active {
             engineBridge.beginMenuCursor(canvasSize: currentRendererViewportFrame().size)
             updateControllerFallbackMenuCursor()
@@ -5399,6 +5400,8 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
         engineWindow.resignKey()
         // CAMERA copies presented frames: the drawables must be readable.
         Self.allowFrameReads(in: engineWindow)
+        // Menus start inset from the rounded corners, play is full screen.
+        updateRendererSideInset()
         view.backgroundColor = .clear
         backdropLayer.isHidden = true
         for subview in view.subviews where subview !== gameView &&
@@ -5439,7 +5442,36 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
               Int(scene.interfaceOrientation.rawValue))
     }
 
+    /// UT's menus reach the screen's corners on a full-screen iPhone, where
+    /// the rounded corners cut them off; while they show, the game view keeps
+    /// this far from the sides. Play stays full screen.
+    static let menuSideInsetKey = "ut99.renderer.sideInset"
+    static let phoneMenuSideInset: CGFloat = 34
+
+    /// Apply the side inset for the current mode and let SDL lay its view
+    /// out again (its layout reads the same setting).
+    fileprivate func updateRendererSideInset() {
+        let inset: CGFloat = traitCollection.userInterfaceIdiom == .phone && originalMenuInputActive
+            ? Self.phoneMenuSideInset : 0
+        guard UserDefaults.standard.double(forKey: Self.menuSideInsetKey) != Double(inset) else { return }
+        UserDefaults.standard.set(Double(inset), forKey: Self.menuSideInsetKey)
+        guard let scene = view.window?.windowScene else { return }
+        for window in scene.windows where window !== view.window {
+            guard let root = window.rootViewController,
+                  String(describing: type(of: root)).contains("SDL"), root.isViewLoaded else { continue }
+            root.view.setNeedsLayout()
+            root.view.layoutIfNeeded()
+            let frame = currentRendererViewportFrame()
+            engineBridge.updateMenuCursorCanvasSize(frame.size)
+            NSLog("UT99 renderer side inset=%.0f frame=%@", inset, frame.debugDescription)
+        }
+    }
+
     private func currentRendererViewportFrame() -> CGRect {
+        let sideInset = CGFloat(UserDefaults.standard.double(forKey: Self.menuSideInsetKey))
+        if traitCollection.userInterfaceIdiom == .phone, sideInset > 0 {
+            return view.bounds.insetBy(dx: sideInset, dy: 0)
+        }
         let insets = view.safeAreaInsets
         return UT99TouchLayoutGeometry.rendererFrame(
             canvasSize: view.bounds.size,
@@ -6579,13 +6611,6 @@ extension GameViewController: UITextFieldDelegate {
             ("", "camera.fill", true, { [weak self] in self?.toggleCameraButtons() }),
             ("CHEAT\n\(UserDefaults.standard.bool(forKey: Self.cheatKey) ? "ON" : "OFF")", nil, true, { [weak self] in
                 self?.setCheat(!UserDefaults.standard.bool(forKey: Self.cheatKey))
-            }),
-            (String(format: "MENU\nSIZE %g", UT99EngineBridge.menuGUIScale / 3), nil, true, { [weak self] in
-                let steps = UT99EngineBridge.menuScaleSteps
-                let current = UT99EngineBridge.menuGUIScale
-                let next = steps[((steps.firstIndex(of: current) ?? 0) + 1) % steps.count]
-                UserDefaults.standard.set(next, forKey: UT99EngineBridge.menuScaleKey)
-                self?.showHostToast(String(format: "Menu size %gx: close and reopen UTP to apply", next / 3))
             }),
             ("", "keyboard", false, { [weak self] in self?.toggleMenuTextKeyboard() }),
             ("CON-\nSOLE", nil, false, { [weak self] in self?.showConsoleBar() }),
