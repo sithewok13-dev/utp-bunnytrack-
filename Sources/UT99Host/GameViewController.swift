@@ -5446,7 +5446,10 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     /// the rounded corners cut them off; while they show, the game view keeps
     /// this far from the sides. Play stays full screen.
     static let menuSideInsetKey = "ut99.renderer.sideInset"
-    static let phoneMenuSideInset: CGFloat = 34
+    static let phoneMenuSideInset: CGFloat = 40
+    /// Top and bottom, with the side inset: the corners curve inward on both
+    /// axes, so the menu bar and status line need a little height too.
+    static let phoneMenuVerticalInset: CGFloat = 10
 
     /// Apply the side inset for the current mode and let SDL lay its view
     /// out again (its layout reads the same setting).
@@ -5470,7 +5473,7 @@ final class GameViewController: GCEventViewController, MTKViewDelegate, UIDocume
     private func currentRendererViewportFrame() -> CGRect {
         let sideInset = CGFloat(UserDefaults.standard.double(forKey: Self.menuSideInsetKey))
         if traitCollection.userInterfaceIdiom == .phone, sideInset > 0 {
-            return view.bounds.insetBy(dx: sideInset, dy: 0)
+            return view.bounds.insetBy(dx: sideInset, dy: Self.phoneMenuVerticalInset)
         }
         let insets = view.safeAreaInsets
         return UT99TouchLayoutGeometry.rendererFrame(
